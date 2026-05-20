@@ -2199,6 +2199,52 @@ def _messages_have_prefix(messages, prefix):
     return True
 
 
+def _message_replay_key(msg):
+    """Return a stable comparison key for replay/overlap de-duplication."""
+    identity = _message_identity(msg)
+    if identity is not None:
+        return identity
+    if not isinstance(msg, dict):
+        return None
+    return (
+        str(msg.get('role') or ''),
+        _message_text(msg.get('content', '')),
+        str(msg.get('tool_call_id') or ''),
+        json.dumps(msg.get('tool_calls') or [], sort_keys=True, ensure_ascii=False),
+    )
+
+
+def _strip_replayed_prefix(existing_messages, candidates):
+    """Drop a candidate prefix that is already the suffix of existing_messages.
+
+    Compression/continuation can replay the active tail from state.db after the
+    previous WebUI context/display already contains it. Prefix-only merge logic
+    then treats that replayed tail as a fresh delta and duplicates a whole turn.
+    Strip the largest exact suffix/prefix overlap before appending.
+    """
+    existing_messages = list(existing_messages or [])
+    candidates = list(candidates or [])
+    max_overlap = min(len(existing_messages), len(candidates))
+    for overlap in range(max_overlap, 0, -1):
+        left = [_message_replay_key(m) for m in existing_messages[-overlap:]]
+        right = [_message_replay_key(m) for m in candidates[:overlap]]
+        if left == right:
+            return candidates[overlap:]
+    return candidates
+
+
+def _dedupe_replayed_active_context(previous_context, result_messages):
+    """Keep model context append-only without re-appending a replayed tail."""
+    previous_context = list(previous_context or [])
+    result_messages = list(result_messages or [])
+    if not previous_context or not result_messages:
+        return result_messages
+    if not _messages_have_prefix(result_messages, previous_context):
+        return result_messages
+    candidates = result_messages[len(previous_context):]
+    return previous_context + _strip_replayed_prefix(previous_context, candidates)
+
+
 def _is_context_compression_marker(msg):
     if not isinstance(msg, dict):
         return False
@@ -2443,6 +2489,8 @@ def _merge_display_messages_after_agent_result(previous_display, previous_contex
 
     if _messages_have_prefix(result_messages, previous_context):
         candidates = result_messages[len(previous_context):]
+        candidates = _strip_replayed_prefix(previous_display, candidates)
+        candidates = _strip_replayed_prefix(previous_context, candidates)
     else:
         current_user_idx = _find_current_user_turn(result_messages, msg_text)
         marker_candidates = [
@@ -4322,6 +4370,10 @@ def _run_agent_streaming(
                     _previous_context_messages,
                     _result_messages,
                 )
+                _next_context_messages = _dedupe_replayed_active_context(
+                    _previous_context_messages,
+                    _next_context_messages,
+                )
                 s.context_messages = _next_context_messages
                 s.messages = _merge_display_messages_after_agent_result(
                     _previous_messages,
@@ -4464,6 +4516,10 @@ def _run_agent_streaming(
                                 _next_context_messages = _restore_reasoning_metadata(
                                     _previous_context_messages,
                                     _result_messages,
+                                )
+                                _next_context_messages = _dedupe_replayed_active_context(
+                                    _previous_context_messages,
+                                    _next_context_messages,
                                 )
                                 s.context_messages = _next_context_messages
                                 s.messages = _merge_display_messages_after_agent_result(
@@ -5280,6 +5336,10 @@ def _run_agent_streaming(
                                 _result_messages = _heal_result.get('messages') or _previous_context_messages
                                 _next_context_messages = _restore_reasoning_metadata(
                                     _previous_context_messages, _result_messages,
+                                )
+                                _next_context_messages = _dedupe_replayed_active_context(
+                                    _previous_context_messages,
+                                    _next_context_messages,
                                 )
                                 s.context_messages = _next_context_messages
                                 s.messages = _merge_display_messages_after_agent_result(
