@@ -71,7 +71,41 @@ def test_importable_agent_rows_push_sidebar_limit_into_sql(tmp_path):
     src = (REPO_ROOT / "api" / "agent_sessions.py").read_text()
     assert "WITH candidates AS" in src
     assert "JOIN candidates c ON c.id = s.id" in src
+    assert "SELECT MAX(mx.timestamp) FROM messages mx WHERE mx.session_id = s.id" in src
     assert "candidate_limit = max(result_limit * 8, result_limit)" in src
+
+
+def test_importable_agent_rows_limit_includes_resumed_old_session(tmp_path):
+    """The capped candidate window must not hide old sessions resumed recently."""
+    db = tmp_path / "state.db"
+    _make_state_db(db, sessions=200, messages_per_session=1)
+
+    old_started = time.time() - 60 * 60 * 24 * 30
+    recent_activity = time.time() + 60
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """
+        INSERT INTO sessions
+        (id, source, session_source, title, model, started_at, message_count, parent_session_id, ended_at, end_reason)
+        VALUES ('cli_resumed_old', 'cli', 'cli', 'Old resumed session', 'openai/gpt-5', ?, 2, NULL, NULL, NULL)
+        """,
+        (old_started,),
+    )
+    conn.execute(
+        "INSERT INTO messages (id, session_id, role, content, timestamp) VALUES ('old_msg_1', 'cli_resumed_old', 'user', 'old hello', ?)",
+        (old_started,),
+    )
+    conn.execute(
+        "INSERT INTO messages (id, session_id, role, content, timestamp) VALUES ('old_msg_2', 'cli_resumed_old', 'assistant', 'recent reply', ?)",
+        (recent_activity,),
+    )
+    conn.commit()
+    conn.close()
+
+    rows = agent_sessions.read_importable_agent_session_rows(db, limit=20, exclude_sources=("webui",))
+
+    assert rows[0]["id"] == "cli_resumed_old"
+    assert rows[0]["actual_message_count"] == 2
 
 
 def test_importable_agent_rows_zero_limit_skips_query_work(tmp_path):

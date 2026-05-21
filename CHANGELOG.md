@@ -3,6 +3,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep capped CLI/agent sidebar scans ordered by latest message activity as well as session start time, so long-lived CLI sessions that were resumed recently stay visible in the sidebar window.
 
 ## [v0.51.101] — 2026-05-20 — Release BY (stage-394 — 2-PR deep-review batch — workspace Git backend + sidebar tab visibility toggle)
 

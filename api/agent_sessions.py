@@ -433,10 +433,13 @@ def read_importable_agent_session_rows(
             if result_limit == 0:
                 return []
             # The sidebar only needs a small visible window. Bound the expensive
-            # messages join to a recent-session candidate set instead of
+            # messages join to a recent-activity candidate set instead of
             # aggregating every historical Hermes state.db session before
-            # slicing in Python. Oversampling preserves room for hidden
-            # compression segments or other rows filtered after projection.
+            # slicing in Python. The candidate ordering must include the latest
+            # message timestamp, not only ``started_at``: long-lived CLI sessions
+            # can be resumed days later and should still surface at the top.
+            # Oversampling preserves room for hidden compression segments or
+            # other rows filtered after projection.
             candidate_limit = max(result_limit * 8, result_limit)
             cur.execute(
                 f"""
@@ -444,7 +447,11 @@ def read_importable_agent_session_rows(
                     SELECT s.id
                     FROM sessions s
                     WHERE {' AND '.join(where_clauses)}
-                    ORDER BY s.started_at DESC
+                    ORDER BY COALESCE(
+                        (SELECT MAX(mx.timestamp) FROM messages mx WHERE mx.session_id = s.id),
+                        s.started_at
+                    ) DESC,
+                    s.started_at DESC
                     LIMIT ?
                 )
                 {select_sql}
