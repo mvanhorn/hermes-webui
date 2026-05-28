@@ -13,6 +13,7 @@ import os
 import queue
 import re
 import platform
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -12892,16 +12893,18 @@ def _script_path_from_config_value(path_value) -> Path | None:
     try:
         if isinstance(path_value, (list, tuple)):
             candidates = [str(part).strip() for part in path_value if str(part).strip()]
-            # Hooks commonly use [python, /path/to/script.py]. Prefer the first
-            # Python-ish script argument over the interpreter so AI-recent notes
-            # reflect the configured recall source rather than "python3".
-            for candidate in candidates:
-                if candidate.endswith((".py", ".sh", ".bash")):
-                    return Path(candidate).expanduser()
-            if candidates:
-                return Path(candidates[-1]).expanduser()
-            return None
-        return Path(str(path_value)).expanduser()
+        else:
+            candidates = shlex.split(str(path_value))
+        # Hooks commonly use either [python, /path/to/script.py] or the string
+        # form "python /path/to/script.py". Prefer the first script-like argument
+        # over the interpreter so AI-recent notes reflect the configured recall
+        # source rather than "python3".
+        for candidate in candidates:
+            if candidate.endswith((".py", ".sh", ".bash")):
+                return Path(candidate).expanduser()
+        if candidates:
+            return Path(candidates[-1]).expanduser()
+        return None
     except Exception:
         return None
 
@@ -12914,7 +12917,9 @@ def _joplin_prefill_script_path() -> Path | None:
     # configured. Fall back to the legacy generic session prefill script only for
     # deployments that have not opted into WebUI dynamic recall.
     return _script_path_from_config_value(
-        cfg.get("webui_prefill_messages_script") or cfg.get("prefill_messages_script")
+        os.getenv("HERMES_WEBUI_PREFILL_MESSAGES_SCRIPT", "")
+        or cfg.get("webui_prefill_messages_script")
+        or cfg.get("prefill_messages_script")
     )
 
 

@@ -232,6 +232,28 @@ def test_joplin_recent_ai_notes_prefers_webui_prefill_script_hook(monkeypatch, t
     assert [note["title"] for note in notes] == ["Current Context", "Open Issues"]
 
 
+def test_joplin_recent_ai_notes_mirrors_webui_prefill_env_hook(monkeypatch, tmp_path):
+    from api import routes
+
+    legacy_script = tmp_path / "legacy_context.py"
+    legacy_script.write_text('CURRENT_CONTEXT_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n', encoding="utf-8")
+    env_script = tmp_path / "env context.py"
+    env_script.write_text('CURRENT_CONTEXT_ID = "5ba9ab822c344115939205ca4e8eaec0"\n', encoding="utf-8")
+    monkeypatch.setattr(routes, "get_config", lambda: {"prefill_messages_script": str(legacy_script)})
+    monkeypatch.setenv("HERMES_WEBUI_PREFILL_MESSAGES_SCRIPT", f'python3 "{env_script}"')
+
+    def fake_get(path, params=None):
+        note_id = path.rsplit("/", 1)[-1]
+        assert note_id != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        return {"id": note_id, "title": "Current Context", "updated_time": 123, "parent_id": "folder"}
+
+    monkeypatch.setattr(routes, "_joplin_api_get", fake_get)
+
+    notes = routes._joplin_recent_ai_notes(limit=1)
+
+    assert [note["title"] for note in notes] == ["Current Context"]
+
+
 
 def test_external_notes_ui_uses_minimal_lucide_icons_for_ai_recent_notes():
     from pathlib import Path

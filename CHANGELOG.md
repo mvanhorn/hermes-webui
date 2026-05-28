@@ -5,7 +5,7 @@
 
 ### Fixed
 
-- The third-party notes drawer's “Recently used by AI” Joplin list now follows the WebUI-specific `webui_prefill_messages_script` hook when configured, including argv-style hooks such as `[python3, /path/to/recall.py]`, before falling back to the legacy generic `prefill_messages_script`.
+- The third-party notes drawer's “Recently used by AI” Joplin list now follows the WebUI-specific `HERMES_WEBUI_PREFILL_MESSAGES_SCRIPT` / `webui_prefill_messages_script` hook when configured, including argv-style hooks such as `[python3, /path/to/recall.py]` and command strings such as `python3 /path/to/recall.py`, before falling back to the legacy generic `prefill_messages_script`.
 
 ## [v0.51.152] — 2026-05-28 — Release DX (stage-batch34 — single-PR optional gateway-backed browser chat)
 
