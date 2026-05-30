@@ -127,7 +127,11 @@ def test_session_sidebar_renders_attention_badge_and_semantic_classes():
     assert "needs-attention" in sessions_js
     assert "attention-approval" in sessions_js
     assert "attention-clarify" in sessions_js
-    assert "session-attention-badge" in sessions_js
+    # Attention is conveyed by the colored status dot (is-attention-*), not a
+    # text badge — the badge was removed in favor of a color-coded dot + rail.
+    assert "is-attention-approval" in sessions_js
+    assert "is-attention-clarify" in sessions_js
+    assert "session-attention-badge" not in sessions_js
     assert "session_attention_approval" in sessions_js
     assert "session_attention_clarify" in sessions_js
     assert "s.attention" in sessions_js
@@ -142,5 +146,8 @@ def test_session_sidebar_renders_attention_badge_and_semantic_classes():
     assert ".session-item.needs-attention" in style_css
     assert ".session-item.attention-approval" in style_css
     assert ".session-item.attention-clarify" in style_css
-    assert ".session-attention-badge" in style_css
+    # The text-badge styles were removed; the dot now carries the color.
+    assert ".session-attention-badge" not in style_css
+    assert ".session-state-indicator.is-attention-approval" in style_css
+    assert ".session-state-indicator.is-attention-clarify" in style_css
     assert "prefers-reduced-motion" in style_css

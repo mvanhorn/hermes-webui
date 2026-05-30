@@ -3984,13 +3984,6 @@ function renderSessionListFromCache(){
       };
       titleRow.appendChild(childCountEl);
     }
-    if(attention){
-      const attentionEl=document.createElement('span');
-      attentionEl.className='session-attention-badge session-attention-badge-'+attention.kind;
-      attentionEl.textContent=attention.label;
-      attentionEl.title=attention.title;
-      titleRow.appendChild(attentionEl);
-    }
     titleRow.appendChild(ts);
     sessionText.appendChild(titleRow);
     if(density==='detailed'){
@@ -4165,7 +4158,9 @@ function renderSessionListFromCache(){
     // sits outside the truncating title span and stays visible.)
     el.appendChild(sessionText);
     const state=document.createElement('span');
-    state.className='session-attention-indicator session-state-indicator'+(isStreaming?' is-streaming':(hasUnread?' is-unread':''));
+    const attentionDotClass=attention?(attention.kind==='approval'?' is-attention-approval':(attention.kind==='clarify'?' is-attention-clarify':' is-attention-generic')):'';
+    state.className='session-attention-indicator session-state-indicator'+(isStreaming?' is-streaming':(hasUnread?' is-unread':''))+attentionDotClass;
+    if(attention&&attention.title) state.title=attention.title;
     state.setAttribute('aria-hidden','true');
     el.appendChild(state);
     // Single trigger button that opens a shared dropdown menu
