@@ -3,6 +3,11 @@
 
 ## [Unreleased]
 
+## [v0.51.197] — 2026-06-01 — Release FQ (stage-batch9 — stop agent replaying edited/undone messages)
+
+### Fixed
+- Editing or undoing a message no longer lets the agent replay the original pre-edit content from `state.db`: the truncation-watermark filter now also skips replaced/stale rows whose timestamp sorts *below* the watermark, and `POST /api/session/truncate` truncates `context_messages` in sync with `messages` so the agent's context matches the visible transcript after Edit/Regenerate. The earlier `_clamp_context_to_watermark()` approach (which turned the watermark into a permanent ceiling that dropped every new turn) is removed. Closes #2914 (#3102, @AlexeyDsov).
+
 ## [v0.51.196] — 2026-06-01 — Release FP (stage-batch8 — file-manager external sessions + artifacts tool metadata + edge-toggle icon + type hints)
 
 ### Fixed
