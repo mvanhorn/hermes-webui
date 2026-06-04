@@ -555,6 +555,22 @@
   :root.dark[data-skin="neon"] a{color:var(--info);transition:text-shadow 0.2s;}
   :root.dark[data-skin="neon"] a:hover{text-shadow:0 0 8px rgba(0,221,255,0.4);}
 
+  /* ── Skin: Hermes Agent (emerald dashboard palette) ──
+     Dark-only color palette from the Hermes Agent dashboard. Typography,
+     radius, and component overrides intentionally stay inherited. */
+  :root.dark[data-skin="hermes-agent"]{
+    --bg:#0F1714;--sidebar:#121D18;--border:#22342C;--border2:rgba(200,154,90,0.10);
+    --text:#F3ECDD;--muted:#A8B4A5;--accent:#C89A5A;--blue:#C89A5A;--gold:#C89A5A;--code-bg:#111B17;
+    --surface:#16211C;--topbar-bg:rgba(15,23,20,.98);--main-bg:rgba(22,33,28,.55);
+    --focus-ring:rgba(200,154,90,.30);--focus-glow:rgba(200,154,90,.10);
+    --input-bg:rgba(255,255,255,.025);--hover-bg:rgba(255,255,255,.045);
+    --strong:#FFF8EB;--em:#D8C5AA;--code-text:#D6AE74;--code-inline-bg:rgba(200,154,90,.08);--pre-text:#F3ECDD;
+    --accent-hover:#D6AE74;--accent-bg:rgba(200,154,90,.08);--accent-bg-strong:rgba(200,154,90,.14);--accent-text:#E4C28D;
+    --error:#D26A6A;--success:#719A68;--warning:#D1A45C;--info:#C89A5A;
+    --surface-subtle:rgba(255,255,255,.02);--surface-subtle-hover:rgba(255,255,255,.04);
+    --border-subtle:rgba(255,255,255,.06);--border-muted:rgba(255,255,255,.10);
+  }
+
   /* ── Skin: Geist Contrast (Geist-inspired neutral precision) ──
      Dark mode uses a #FFF175 accent; solid accent controls use black
      foreground, while selected/navigation states stay neutral and restrained. */

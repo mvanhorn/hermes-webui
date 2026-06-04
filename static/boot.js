@@ -1476,6 +1476,7 @@ const _SKINS=[
   {name:'Hepburn',   colors:['#c6246a','#ec5597','#f2abca']},
   {name:'Nous',     colors:['#4682B4','#3A6E9A','#2C5F88']},
   {name:'Neon',     colors:['#B347FF','#C76BFF','#00DDFF']},
+  {name:'Hermes Agent', value:'hermes-agent', colors:['#0F1714','#16211C','#C89A5A']},
   {name:'Geist Contrast', value:'geist-contrast', colors:['#000000','#ffffff','#FFF175']},
   {name:'Zeus',     colors:['#FFD700','#FFBF00','#1A1A00']},
 ];
