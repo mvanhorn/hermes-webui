@@ -5028,7 +5028,7 @@ async function refreshSession() {
     if(pendingMsg) S.messages.push(pendingMsg);
     S.activeStreamId=data.session.active_stream_id||null;
 
-    syncTopbar(); renderMessages();
+    syncTopbar(); _renderMessagesWithScrollSnapshot();
     showToast('Conversation refreshed');
   } catch(e) { setStatus('Refresh failed: ' + e.message); }
 }
@@ -5979,6 +5979,7 @@ function _compressionCardsNode(state){
 }
 function appendLiveCompressionCard(state){
   if(!S.session||!S.activeStreamId||!state) return false;
+  const scrollSnapshot=_captureMessageScrollSnapshot();
   let turn=$('liveAssistantTurn');
   if(!turn){
     turn=_createAssistantTurn();
@@ -6014,6 +6015,7 @@ function appendLiveCompressionCard(state){
   const existing=inner.querySelector('[data-live-compression-card="1"]');
   if(existing) existing.replaceWith(node);
   else inner.appendChild(node);
+  _restoreMessageScrollSnapshotSameFrame(scrollSnapshot);
   if(typeof scrollIfPinned==='function') scrollIfPinned();
   return true;
 }
@@ -6280,7 +6282,7 @@ function _handoffStateForCurrentSession(){
 }
 function clearHandoffUi(){
   window._handoffUi=null;
-  renderMessages();
+  _renderMessagesWithScrollSnapshot();
 }
 function setHandoffUi(state){
   if(!state){
@@ -6288,7 +6290,7 @@ function setHandoffUi(state){
     return;
   }
   window._handoffUi={...state};
-  renderMessages();
+  _renderMessagesWithScrollSnapshot();
 }
 function _handoffCardsHtml(state){
   if(!state) return '';
@@ -6521,7 +6523,13 @@ function _cliToolCardHasDiffSnippet(resultSnippet, patchSnippet){
 function _captureMessageScrollSnapshot(){
   const el=$('messages');
   if(!el) return null;
-  return {top:el.scrollTop};
+  const bottom=Math.max(0,el.scrollHeight-el.scrollTop-el.clientHeight);
+  return {
+    top:el.scrollTop,
+    bottom,
+    pinned:_shouldFollowMessagesOnDomReplace(),
+    userUnpinned:_messageUserUnpinned,
+  };
 }
 function _restoreMessageScrollSnapshot(snapshot){
   const el=$('messages');
@@ -6532,6 +6540,33 @@ function _restoreMessageScrollSnapshot(snapshot){
   // Sync _lastScrollTop after programmatic restore so sticky-unpin does not false-trigger (#1731).
   _lastScrollTop=el.scrollTop;
   requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+}
+function _restoreMessageScrollSnapshotSameFrame(snapshot){
+  const el=$('messages');
+  if(!el||!snapshot) return;
+  const maxTop=Math.max(0,el.scrollHeight-el.clientHeight);
+  const bottom=Number(snapshot.bottom);
+  const target=(snapshot.pinned===true&&Number.isFinite(bottom))
+    ? maxTop-Math.max(0,bottom)
+    : Number(snapshot.top)||0;
+  _programmaticScroll=true;
+  el.scrollTop=Math.max(0,Math.min(target,maxTop));
+  _lastScrollTop=el.scrollTop;
+  if(snapshot.pinned===true){
+    _messageUserUnpinned=false;
+    _scrollPinned=true;
+    _nearBottomCount=2;
+  }else if(snapshot.userUnpinned===true){
+    _messageUserUnpinned=true;
+    _scrollPinned=false;
+    _nearBottomCount=0;
+  }
+  requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+}
+function _renderMessagesWithScrollSnapshot(options){
+  const scrollSnapshot=_captureMessageScrollSnapshot();
+  renderMessages({...(options||{}),preserveScroll:true});
+  _restoreMessageScrollSnapshotSameFrame(scrollSnapshot);
 }
 function _scrollAfterMessageRender(preserveScroll, scrollSnapshot){
   // Terminal stream renders can happen after S.activeStreamId is cleared.
