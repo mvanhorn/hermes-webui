@@ -1,0 +1,129 @@
+import json
+import pathlib
+from types import SimpleNamespace
+from urllib.parse import urlencode
+
+import api.profiles
+import api.routes as routes
+
+
+REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
+
+
+def project_context_for(workspace):
+    return routes._read_active_project_context(pathlib.Path(workspace))
+
+
+def test_project_context_reads_agents_md_from_active_workspace(tmp_path):
+    workspace = tmp_path / "agents-only"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text("# Agent Rules\n\nUse pytest here.", encoding="utf-8")
+
+    data = project_context_for(workspace)
+
+    assert "Use pytest here." in data["content"]
+    assert data["path"].endswith("AGENTS.md")
+    assert data["name"] == "AGENTS.md"
+    assert data["shadowed"] == []
+
+
+def test_project_context_prefers_hermes_md_and_reports_shadowed_agents(tmp_path):
+    workspace = tmp_path / "priority"
+    workspace.mkdir()
+    (workspace / "HERMES.md").write_text("# Hermes Rules\n\nHermes wins.", encoding="utf-8")
+    (workspace / "AGENTS.md").write_text("# Agent Rules\n\nAgents lose.", encoding="utf-8")
+
+    data = project_context_for(workspace)
+
+    assert "Hermes wins." in data["content"]
+    assert "Agents lose." not in data["content"]
+    assert data["path"].endswith("HERMES.md")
+    assert [item["name"] for item in data["shadowed"]] == ["AGENTS.md"]
+    assert data["shadowed"][0]["shadowed_by"] == "HERMES.md"
+
+
+def test_project_context_walks_hermes_md_to_git_root_but_not_agents_md(tmp_path):
+    root = tmp_path / "repo"
+    child = root / "src" / "pkg"
+    child.mkdir(parents=True)
+    (root / ".git").mkdir()
+    (root / ".hermes.md").write_text("# Root Hermes\n\nRoot project rules.", encoding="utf-8")
+    (root / "AGENTS.md").write_text("# Root Agents\n\nRoot AGENTS should not be cwd-loaded.", encoding="utf-8")
+
+    data = project_context_for(child)
+
+    assert "Root project rules." in data["content"]
+    assert data["path"].endswith(".hermes.md")
+    assert data["path"].startswith(str(root))
+    assert data["shadowed"] == []
+
+
+def test_project_context_workspace_switch_re_resolves_same_session(tmp_path, monkeypatch):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / "AGENTS.md").write_text("First workspace rules.", encoding="utf-8")
+    (second / "AGENTS.md").write_text("Second workspace rules.", encoding="utf-8")
+
+    current = {"workspace": str(first)}
+
+    def fake_get_session(_sid):
+        return SimpleNamespace(workspace=current["workspace"])
+
+    monkeypatch.setattr(routes, "get_session", fake_get_session)
+    parsed = SimpleNamespace(query=urlencode({"session_id": "sid"}))
+
+    before = routes._read_active_project_context(routes._memory_project_context_workspace(parsed))
+    assert "First workspace rules." in before["content"]
+
+    current["workspace"] = str(second)
+    after = routes._read_active_project_context(routes._memory_project_context_workspace(parsed))
+    assert "Second workspace rules." in after["content"]
+    assert "First workspace rules." not in after["content"]
+    assert after["workspace"] == str(second.resolve())
+
+
+def test_project_context_absent_returns_empty_fields(tmp_path):
+    workspace = tmp_path / "empty"
+    workspace.mkdir()
+    (workspace / ".git").mkdir()
+
+    data = project_context_for(workspace)
+
+    assert data["content"] == ""
+    assert data["path"] == ""
+    assert data["mtime"] is None
+    assert data["shadowed"] == []
+
+
+def test_project_context_content_is_redacted_in_memory_response(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    workspace = tmp_path / "redacted"
+    (home / "memories").mkdir(parents=True)
+    workspace.mkdir()
+    secret = "ghp_TestFakeCredential1234567890ab"
+    (workspace / "AGENTS.md").write_text(
+        f"# Agent Rules\n\nGitHub PAT: {secret}\nNormal note: keep me.",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(api.profiles, "get_active_hermes_home", lambda: home)
+    monkeypatch.setattr(routes, "_memory_project_context_workspace", lambda _parsed: workspace)
+    monkeypatch.setattr(routes, "_external_notes_sources_enabled", lambda: False)
+    monkeypatch.setattr(routes, "j", lambda _handler, payload, **_kwargs: payload)
+
+    payload = routes._handle_memory_read(object(), SimpleNamespace(query=""))
+    dumped = json.dumps(payload)
+
+    assert secret not in dumped
+    assert "Normal note: keep me." in payload["project_context"]
+
+
+def test_memory_panel_defines_read_only_project_context_section():
+    panels = (REPO_ROOT / "static" / "panels.js").read_text(encoding="utf-8")
+
+    assert "key: 'project_context'" in panels
+    assert "readOnly: true" in panels
+    assert "project_context_shadowed" in panels
+    assert "/api/memory?session_id=" in panels
