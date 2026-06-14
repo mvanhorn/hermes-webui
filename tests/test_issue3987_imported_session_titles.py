@@ -213,8 +213,8 @@ def test_regenerate_endpoint_only_blocks_read_only_imported_sessions():
     endpoint_idx = ROUTES_PY.index('"/api/session/title/regenerate"')
     next_endpoint_idx = ROUTES_PY.index('"/api/personality/set"', endpoint_idx)
     block = ROUTES_PY[endpoint_idx:next_endpoint_idx]
-    assert 'if getattr(s, "read_only", False):' in block
-    assert 'getattr(s, "is_imported", False)' not in block
+    assert "_get_or_materialize_session(sid)" in block
+    assert "except PermissionError:" in block
 
 
 def test_sessions_ui_keeps_regenerate_action_for_writable_imports():

@@ -7750,11 +7750,10 @@ def handle_post(handler, parsed) -> bool:
         sid = body["session_id"]
         prefer_latest = bool(body.get("prefer_latest", False))
         try:
-            s = get_session(sid)
-            s = _ensure_full_session_before_mutation(sid, s)
+            s = _get_or_materialize_session(sid)
         except KeyError:
             return bad(handler, "Session not found", 404)
-        if getattr(s, "read_only", False):
+        except PermissionError:
             return bad(handler, "Read-only imported sessions cannot be renamed", 403)
         next_title, reason, raw_preview = generate_session_title_for_session(s, prefer_latest=prefer_latest)
         if not next_title:
