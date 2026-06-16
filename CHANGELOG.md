@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.465] — 2026-06-16 — Release PZ (workspace null-byte hardening)
+
+### Fixed
+
+- **Remote workspace paths containing an embedded null byte are now rejected (#4326).** Completes the #4273/#3664 remote-workspace trust-boundary hardening (v0.51.463): `_remote_terminal_workspace_candidate` now fails closed on a `\x00` in either the candidate path or `terminal.cwd`, before normalization. Previously a null-byte path skipped the POSIX-normalize branch, `_safe_resolve` swallowed the `ValueError` and returned the raw null `Path`, and the string-level containment check wrongly succeeded — accepting the path. Matches the fail-closed null-byte handling already applied at `_as_posix_path` / `_safe_resolve`. Thanks @rodboev.
+
 ## [v0.51.464] — 2026-06-16 — Release PY (scannable model picker)
 
 ### Added
