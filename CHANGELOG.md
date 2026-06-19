@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.505] — 2026-06-18 — Release RP (allow macOS Mail `message:` links in chat markdown)
+
+### Fixed
+
+- **`message:` links (macOS Mail message URLs) now render as clickable links in chat instead of being blocked (#4319).** The markdown renderer's link allowlists treated `message:` like an unknown scheme and dropped it; it's now allowed alongside the other OS-delegated schemes (`mailto:`/`tel:`) on every render path (streamed markdown + the two `renderMd` link passes + the anchor-safety check). The `javascript:`/`data:`/`vbscript:` denylist still fires first, so this adds no script-execution surface. Useful for RAG/notes workflows that link back to source emails. Thanks @bergeouss.
+
 ## [v0.51.504] — 2026-06-18 — Release RO (group OpenRouter / Nous models by vendor in the model picker)
 
 ### Added
