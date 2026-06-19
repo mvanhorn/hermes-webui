@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.526] — 2026-06-19 — Release SK (the "Running" indicator clears when the server is idle)
+
+### Fixed
+
+- **The "Running" indicator no longer stays stuck after the stream dies during a provider retry (#4354).** Three client-side guards keyed on the local `_sendInProgress`/`_sendInProgressSid` flags could keep a session marked busy (and keep a stale `INFLIGHT` entry alive) even after the server reported the run idle. The idle reconciler and the stale-INFLIGHT purge now treat the server's `is_streaming=false` as authoritative, and `loadSession` only asserts `S.busy` when the server confirms an active stream — so a session whose stream died mid-retry stops showing a spinner without needing a reload. Thanks @bergeouss.
+
 ## [v0.51.525] — 2026-06-19 — Release SJ (built-in personalities available in WebUI)
 
 ### Added
