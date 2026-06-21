@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.559] — 2026-06-21 — Release TR (cron model picker copy polish)
+
+### Changed
+
+- **Clearer copy on the scheduled-job (cron) model picker.** The model field now explains that a job can use the profile default model at run time or be pinned to a specific provider/model, and no-agent (script-only) jobs show a hint that the model is unused since they run the configured script directly. Added regression test coverage for the picker and its localized strings. Thanks @TomBanksAU.
+
 ## [v0.51.558] — 2026-06-21 — Release TQ (workspace tree shows symlinks that point outside the workspace)
 
 ### Added
