@@ -36,6 +36,11 @@ def _browser_headers() -> dict[str, str]:
     return {"Origin": f"{parsed.scheme}://{parsed.netloc}"}
 
 
+def _referer_only_headers() -> dict[str, str]:
+    parsed = urllib.parse.urlparse(BASE)
+    return {"Referer": f"{parsed.scheme}://{parsed.netloc}/workspace"}
+
+
 def _post_json(path: str, body: dict | None = None, headers: dict[str, str] | None = None) -> tuple[dict, int]:
     req = urllib.request.Request(
         BASE + path,
@@ -101,6 +106,13 @@ class TestIssue4582EscapeNavigationLive:
         )
         assert denied_status == 403, denied
 
+        referer_only, referer_only_status = _post_json(
+            "/api/escape/authorize",
+            {"session_id": sid, "path": "escape-file.txt"},
+            headers=_referer_only_headers(),
+        )
+        assert referer_only_status == 403, referer_only
+
         auth, status = _post_json(
             "/api/escape/authorize",
             {"session_id": sid, "path": "escape-file.txt"},
@@ -146,6 +158,13 @@ class TestIssue4582EscapeNavigationLive:
 
         denied, denied_status = _post_json("/api/escape/authorize", {"session_id": sid, "path": "escape"})
         assert denied_status == 403, denied
+
+        referer_only, referer_only_status = _post_json(
+            "/api/escape/authorize",
+            {"session_id": sid, "path": "escape"},
+            headers=_referer_only_headers(),
+        )
+        assert referer_only_status == 403, referer_only
 
         auth, status = _post_json(
             "/api/escape/authorize",
