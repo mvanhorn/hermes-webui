@@ -1950,6 +1950,8 @@ def _build_session_list_cache_payload(
             return True
 
         attention = session.get("attention")
+        if not (isinstance(attention, dict) and attention.get("kind")):
+            attention = _session_attention_summary(str(session.get("session_id") or ""))
         if isinstance(attention, dict) and attention.get("kind"):
             if _numeric_count(attention.get("count")) > 0:
                 return True

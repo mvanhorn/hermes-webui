@@ -101,7 +101,6 @@ def _session_rows():
             "profile": "default",
             "archived": False,
             "message_count": 0,
-            "attention": {"kind": "clarify", "count": 1},
             "updated_at": 600,
             "last_message_at": 600,
             "source": "webui",
@@ -182,6 +181,13 @@ def _install_common_monkeypatches(monkeypatch, rows):
     monkeypatch.setattr(routes, "all_sessions", lambda diag=None: list(rows))
     monkeypatch.setattr(routes, "_reconcile_stale_stream_state_for_session_rows", lambda _rows: False)
     monkeypatch.setattr(routes, "_enrich_sidebar_lineage_metadata", lambda _rows: None)
+    monkeypatch.setattr(
+        routes,
+        "_session_attention_summary",
+        lambda session_id: {"kind": "clarify", "count": 1}
+        if str(session_id) == "attention-row"
+        else None,
+    )
     monkeypatch.setattr(routes, "get_cli_sessions", lambda source_filter=None, all_profiles=False: [])
     monkeypatch.setattr(routes, "agent_session_rows_existing", lambda ids, profile=None: set(ids) & session_ids)
     monkeypatch.setattr(routes, "load_settings", lambda: {"show_cli_sessions": True})
@@ -235,6 +241,7 @@ def test_omit_exclude_hidden_still_returns_default_hidden_rows(monkeypatch):
     assert "hidden-by-default" in session_ids
 
 
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
 def test_default_and_unassigned_queries_send_exclude_hidden(monkeypatch):
     src = SESSIONS_JS.read_text(encoding="utf-8")
     requested_source_fn = _extract_function(src, "_requestedSessionSidebarSource")
