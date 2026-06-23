@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.608] — 2026-06-23 — Release VO (recycle DOM nodes during virtual-scroll re-renders)
+
+### Changed
+
+- **Long transcripts recycle DOM nodes during virtual-scroll re-renders instead of rebuilding the whole list.** While scrolling a long conversation, the virtualized message list now reuses existing row/turn DOM nodes (keyed on a dedicated `data-recycle-key`, type-guarded so a user row is never reused as an assistant turn and vice-versa) rather than tearing down and recreating the window on every re-render. Recycled nodes are fully reset before refill and the recycle pool is render-local (bounded, never leaks across sessions). Also hardens scrollbar-drag handling so the `_programmaticScroll` suppression flag is always cleared (including the small-delta measurement early-return), so a real user scroll right after a drag is never ignored. Measurably reduces re-render cost and scroll jank on large transcripts. Thanks @rodboev. (#4346)
+
 ## [v0.51.607] — 2026-06-23 — Release VN (empty-profile loading skeleton)
 
 ### Changed
