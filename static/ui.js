@@ -972,6 +972,7 @@ function _scheduleMessageVirtualizedRender(force){
       _programmaticScroll=true;
       _programmaticScrollSetAt=performance.now();
       _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+      _deferClearProgrammaticScroll();
       _messageVirtualWindowKey=liveKey;
       return;
     }
@@ -3927,6 +3928,10 @@ if(typeof window!=='undefined'){
     if(!_scrollbarDragActive) return;
     _scrollbarDragActive=false;
     _scheduleMessageVirtualizedRender(true);
+  },{passive:true});
+  window.addEventListener('blur',()=>{ _scrollbarDragActive=false; },{passive:true});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden') _scrollbarDragActive=false;
   },{passive:true});
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
@@ -11437,17 +11442,19 @@ function renderMessages(options){
     if(isUser){
       currentAssistantTurn=null;
       let row=_msgNodeRecycleEnabled?_recycleStash.get(rawIdx):null;
-      const newRawText=String(displayContent).trim();
       if(row&&!row.classList.contains('msg-row')) row=null;
+      const newRawText=String(displayContent).trim();
+      const nextRowHtml=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
       if(row){
         row.id=_userMessageDomId(rawIdx);
         row.dataset.msgIdx=rawIdx;
         row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
         row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
         row.dataset.role='user';
-        if(row.dataset.rawText!==newRawText){
+        delete row.dataset.editing;
+        if(row.dataset.rawText!==newRawText||row.innerHTML!==nextRowHtml){
           row.dataset.rawText=newRawText;
-          row.innerHTML=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+          row.innerHTML=nextRowHtml;
         }
       }else{
         row=document.createElement('div');
@@ -11458,7 +11465,7 @@ function renderMessages(options){
         row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
         row.dataset.role='user';
         row.dataset.rawText=newRawText;
-        row.innerHTML=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+        row.innerHTML=nextRowHtml;
       }
       inner.appendChild(row);
       userRows.set(rawIdx, row);
@@ -11471,10 +11478,16 @@ function renderMessages(options){
       if(recycled){
         const blocks=_assistantTurnBlocks(recycled);
         if(blocks) blocks.innerHTML='';
+        recycled.removeAttribute('data-transparent-turn-collapsed');
+        recycled.removeAttribute('data-transparent-turn-toggle-bound');
+        const role=recycled.querySelector('.msg-role.assistant');
+        if(role) role.outerHTML=_assistantRoleHtml(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
         currentAssistantTurn=recycled;
       }else{
         currentAssistantTurn=_createAssistantTurn(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
       }
+      currentAssistantTurn.dataset.role='assistant';
+      if(S.session) currentAssistantTurn.dataset.sessionId=S.session.session_id;
       currentAssistantTurn.dataset.recycleKey=rawIdx;
       inner.appendChild(currentAssistantTurn);
     }

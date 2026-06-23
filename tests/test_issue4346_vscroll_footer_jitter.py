@@ -793,7 +793,7 @@ const row = {
   dataset: { msgIdx: '2', rawText: 'hello world' },
   classList: { contains(name){ return name === 'msg-row'; } },
   set innerHTML(val){ innerHTMLWriteCount++; },
-  get innerHTML(){ return '<div class="msg-body">hello world</div>'; },
+  get innerHTML(){ return '<div class="msg-body">hello world</div><div class="msg-foot">same</div>'; },
 };
 
 const _recycleStash = new Map();
@@ -806,9 +806,10 @@ let r = _msgNodeRecycleEnabled ? _recycleStash.get(rawIdx) : null;
 if(r && !r.classList.contains('msg-row')) r = null;
 if(r){
   const newRawText = 'hello world';
-  if(r.dataset.rawText !== newRawText){
+  const nextRowHtml = '<div class="msg-body">hello world</div><div class="msg-foot">same</div>';
+  if(r.dataset.rawText !== newRawText || r.innerHTML !== nextRowHtml){
     r.dataset.rawText = newRawText;
-    r.innerHTML = 'would be set';
+    r.innerHTML = nextRowHtml;
   }
 }
 
@@ -844,9 +845,10 @@ let r = _msgNodeRecycleEnabled ? _recycleStash.get(rawIdx) : null;
 if(r && !r.classList.contains('msg-row')) r = null;
 if(r){
   const newRawText = 'new content';
-  if(r.dataset.rawText !== newRawText){
+  const nextRowHtml = '<div class="msg-body">new content</div>';
+  if(r.dataset.rawText !== newRawText || r.innerHTML !== nextRowHtml){
     r.dataset.rawText = newRawText;
-    r.innerHTML = '<div class="msg-body">new content</div>';
+    r.innerHTML = nextRowHtml;
   }
 }
 
@@ -861,6 +863,82 @@ console.log(JSON.stringify({
         assert out["recycled"] is True
         assert out["updated"] is True, "innerHTML was not updated for changed content"
         assert out["rawText_updated"] is True, "rawText was not updated"
+
+    def test_same_rawtext_but_changed_markup_updates_innerhtml(self):
+        """Recycled rows must refresh when files/footer markup changes."""
+        source = r"""
+let innerHTMLWriteCount = 0;
+
+const row = {
+  dataset: { msgIdx: '2', rawText: 'same text' },
+  classList: { contains(name){ return name === 'msg-row'; } },
+  set innerHTML(val){ innerHTMLWriteCount++; this._html = val; },
+  get innerHTML(){ return '<div class="msg-body">same text</div><div class="msg-foot">old</div>'; },
+};
+
+const _recycleStash = new Map();
+_recycleStash.set(2, row);
+const _msgNodeRecycleEnabled = true;
+
+const rawIdx = 2;
+let r = _msgNodeRecycleEnabled ? _recycleStash.get(rawIdx) : null;
+if(r && !r.classList.contains('msg-row')) r = null;
+const newRawText = 'same text';
+const nextRowHtml = '<div class="msg-body">same text</div><div class="msg-foot">new</div>';
+if(r){
+  if(r.dataset.rawText !== newRawText || r.innerHTML !== nextRowHtml){
+    r.dataset.rawText = newRawText;
+    r.innerHTML = nextRowHtml;
+  }
+}
+
+console.log(JSON.stringify({
+  recycled: r === row,
+  innerHTML_writes: innerHTMLWriteCount,
+  updated: innerHTMLWriteCount === 1,
+}));
+"""
+        out = json.loads(_run_node(source))
+        assert out["recycled"] is True
+        assert out["updated"] is True, \
+            "same rawText with changed markup must still refresh the row"
+
+    def test_recycled_row_clears_transient_editing_flag(self):
+        """Recycled rows must clear stale edit state before reuse."""
+        source = r"""
+const row = {
+  dataset: { msgIdx: '2', rawText: 'same text', editing: '1' },
+  classList: { contains(name){ return name === 'msg-row'; } },
+  set innerHTML(val){ this._html = val; },
+  get innerHTML(){ return '<div class="msg-body">same text</div><div class="msg-foot">same</div>'; },
+};
+
+const _recycleStash = new Map();
+_recycleStash.set(2, row);
+const _msgNodeRecycleEnabled = true;
+
+const rawIdx = 2;
+let r = _msgNodeRecycleEnabled ? _recycleStash.get(rawIdx) : null;
+if(r && !r.classList.contains('msg-row')) r = null;
+const newRawText = 'same text';
+const nextRowHtml = '<div class="msg-body">same text</div><div class="msg-foot">same</div>';
+if(r){
+  delete r.dataset.editing;
+  if(r.dataset.rawText !== newRawText || r.innerHTML !== nextRowHtml){
+    r.dataset.rawText = newRawText;
+    r.innerHTML = nextRowHtml;
+  }
+}
+
+console.log(JSON.stringify({
+  recycled: r === row,
+  editing_cleared: !('editing' in r.dataset),
+}));
+"""
+        out = json.loads(_run_node(source))
+        assert out["recycled"] is True
+        assert out["editing_cleared"] is True, \
+            "recycled rows must drop stale dataset.editing state"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -982,6 +1060,15 @@ console.log(JSON.stringify({
             "pointercancel handler does not clear _scrollbarDragActive"
         assert '_scheduleMessageVirtualizedRender(true)' in handler, \
             "pointercancel handler does not trigger forced re-render"
+
+    def test_blur_and_visibilitychange_clear_flag(self):
+        """Losing focus must not leave scrollbar drag mode stuck on."""
+        assert "window.addEventListener('blur'" in JS, \
+            "blur listener not registered for drag cleanup"
+        assert "document.addEventListener('visibilitychange'" in JS, \
+            "visibilitychange listener not registered for drag cleanup"
+        assert "document.visibilityState==='hidden'" in JS, \
+            "visibilitychange cleanup must guard on hidden state"
 
 
 class TestScrollbarDragRenderDuringDrag:
@@ -1648,6 +1735,48 @@ console.log(JSON.stringify({ updates_key: updatesKey }));
         out = json.loads(_run_node(source))
         assert out["updates_key"] is True, \
             "drag path must update _messageVirtualWindowKey"
+
+    def test_drag_path_defers_programmatic_scroll_clear(self):
+        """The drag path must schedule a deferred clear even when delta < 2px."""
+        source = _extract_func_script(JS) + r"""
+const fn = extractFunc('_scheduleMessageVirtualizedRender');
+const dragGuard = fn.indexOf('if(_scrollbarDragActive)');
+const returnIdx = fn.indexOf('return;', dragGuard);
+const dragBlock = fn.slice(dragGuard, returnIdx + 10);
+const schedulesClear = dragBlock.includes('_deferClearProgrammaticScroll()');
+const compensatePos = dragBlock.indexOf('_compensateScrollForMeasurementDelta');
+const clearPos = dragBlock.indexOf('_deferClearProgrammaticScroll()');
+console.log(JSON.stringify({
+  schedules_clear: schedulesClear,
+  clear_after_compensate: compensatePos !== -1 && clearPos > compensatePos,
+}));
+"""
+        out = json.loads(_run_node(source))
+        assert out["schedules_clear"] is True, \
+            "drag path must call _deferClearProgrammaticScroll()"
+        assert out["clear_after_compensate"] is True, \
+            "drag path must defer the clear after the compensate render"
+
+    def test_recycled_assistant_turn_refreshes_role_header(self):
+        """Recycled assistant turns must refresh timestamp and TPS header markup."""
+        source = _extract_func_script(JS) + r"""
+const fn = extractFunc('renderMessages');
+const assistantStart = fn.indexOf('if(!currentAssistantTurn){');
+const assistantEnd = fn.indexOf('const seg=document.createElement', assistantStart);
+const assistantBranch = fn.slice(assistantStart, assistantEnd);
+console.log(JSON.stringify({
+  rewrites_role_header: assistantBranch.includes(\"role.outerHTML=_assistantRoleHtml(\"),
+  refreshes_session_id: assistantBranch.includes(\"currentAssistantTurn.dataset.sessionId=S.session.session_id\"),
+  clears_transparent_collapse: assistantBranch.includes(\"recycled.removeAttribute('data-transparent-turn-collapsed')\"),
+}));
+"""
+        out = json.loads(_run_node(source))
+        assert out["rewrites_role_header"] is True, \
+            "recycled assistant turns must refresh the role header"
+        assert out["refreshes_session_id"] is True, \
+            "recycled assistant turns must refresh the session id"
+        assert out["clears_transparent_collapse"] is True, \
+            "recycled assistant turns must clear stale transparent collapse state"
 
 
 class TestStashKeyCoercion:
