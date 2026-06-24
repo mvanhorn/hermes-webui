@@ -887,7 +887,7 @@ async function newSession(flash, options={}){
       newModelState=explicitModelOverride;
       consumedExplicitModelOverride=true;
     }else if(hasLoadedSession&&window._defaultModel){
-      newModelState={model:window._defaultModel,model_provider:window._activeProvider||null};
+      newModelState={model:window._defaultModel,model_provider:null};
       usingConfiguredDefault=true;
     }else if(modelSelForNew&&modelSelForNew.value&&typeof _modelStateForSelect==='function'){
       newModelState=_modelStateForSelect(modelSelForNew,modelSelForNew.value);

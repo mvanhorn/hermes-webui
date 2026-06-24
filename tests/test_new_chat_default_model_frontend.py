@@ -139,7 +139,7 @@ def test_new_chat_prefers_explicit_empty_composer_override_before_configured_def
     assert "consumedExplicitModelOverride" in fn
     assert "usingConfiguredDefault" in fn
     assert "_clearEmptyComposerModelOverride" in fn
-    assert "newModelState={model:window._defaultModel,model_provider:window._activeProvider||null};" in fn
+    assert "newModelState={model:window._defaultModel,model_provider:null};" in fn
     assert fn.index("explicitModelOverride") < fn.index("hasLoadedSession&&window._defaultModel") < fn.index("_modelStateForSelect"), (
         "newSession() must prefer the empty-composer override first, then the configured default for loaded-session flows, then legacy picker state"
     )
