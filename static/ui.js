@@ -436,6 +436,9 @@ let _messageVirtualMeasurementRetryCount=0;
 let _messageVirtualScrollActive=false;
 let _messageVirtualScrollSettleTimer=0;
 let _messageVirtualDeferredMeasurement=null;
+let _msgNodeRecycleEnabled=false;
+const _recycleStash=new Map();
+let _scrollbarDragActive=false;
 function _markMessageVirtualScrollActive(){
   _messageVirtualScrollActive=true;
   clearTimeout(_messageVirtualScrollSettleTimer);
@@ -817,9 +820,10 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   const containerRect=container.getBoundingClientRect();
   const rect=row.getBoundingClientRect();
   const targetTop=Number(anchor.topOffset)||0;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   container.scrollTop+=(rect.top-containerRect.top)-targetTop;
-  requestAnimationFrame(()=>{ _programmaticScroll=false; });
+  if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+  else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   return true;
 }
 let _messageViewportAnchorRemounting=false;
@@ -885,10 +889,10 @@ function _compensateScrollForMeasurementDelta(renderFn){
   const actualOffset=rowRect.top-containerRect.top;
   const delta=actualOffset-anchorBefore.topOffset;
   if(Math.abs(delta)<2) return;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   container.scrollTop=scrollTopBefore+delta;
   _lastScrollTop=container.scrollTop;
-  requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
+  _deferClearProgrammaticScroll();
 }
 function _messageViewportIntersectsRenderedRow(){
   const container=$('messages');
@@ -965,7 +969,19 @@ function _scheduleMessageVirtualizedRender(force){
     const liveWindow=_currentMessageVirtualWindow(liveVisWithIdx,_messageVirtualKeepTailCount());
     const liveKey=_messageVirtualWindowKeyFor(liveWindow);
     if(!force&&liveKey===_messageVirtualWindowKey) return;
-    _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+    if(_scrollbarDragActive){
+      _programmaticScroll=true;
+      _programmaticScrollSetAt=performance.now();
+      _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+      _deferClearProgrammaticScroll();
+      _messageVirtualWindowKey=liveKey;
+      return;
+    }
+    _msgNodeRecycleEnabled=true;
+    try{
+      _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
+    }
+    finally{ _msgNodeRecycleEnabled=false; }
   });
 }
 
@@ -1046,7 +1062,7 @@ async function jumpToSessionStart(){
   if(!container||!S.session) return;
   _scrollPinned=false;
   _messageUserUnpinned=true;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   try{
     // During active streaming, skip full message load — API response won't
     // include live messages from the current turn, and replacing S.messages
@@ -1065,7 +1081,7 @@ async function jumpToSessionStart(){
     requestAnimationFrame(()=>{
       container.scrollTop=0;
       _updateSessionStartJumpButton();
-      requestAnimationFrame(()=>{ _programmaticScroll=false; });
+      _deferClearProgrammaticScroll();
     });
   }catch(e){
     console.warn('jumpToSessionStart failed:',e);
@@ -1124,7 +1140,7 @@ async function jumpToTurnQuestion(questionRawIdx, assistantRawIdx){
   if(visibleIdx>=0){
     _scrollPinned=false;
     _messageUserUnpinned=true;
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     container.scrollTop=_messageVirtualScrollTopForVisibleIdx(visWithIdx, visibleIdx, container);
     _messageVirtualWindowKey='';
     renderMessages({ preserveScroll:true });
@@ -1135,7 +1151,7 @@ async function jumpToTurnQuestion(questionRawIdx, assistantRawIdx){
         renderMessages({ preserveScroll:true });
         requestAnimationFrame(scrollToTarget);
       }
-      requestAnimationFrame(()=>{ _programmaticScroll=false; });
+      _deferClearProgrammaticScroll();
     });
     return;
   }
@@ -3667,6 +3683,9 @@ window.addEventListener('resize',function(){
 // Programmatic scrolls are ignored via _programmaticScroll. Fixes #1469 / #1360 / #1731.
 let _scrollPinned=true;
 let _programmaticScroll=false;
+let _programmaticScrollSetAt=0;
+let _programmaticScrollResetTimer=0;
+function _deferClearProgrammaticScroll(ms){clearTimeout(_programmaticScrollResetTimer);_programmaticScrollResetTimer=setTimeout(()=>{_programmaticScroll=false;},ms||80);}
 let _nearBottomCount=0;
 let _lastScrollTop=null;
 // Sticky-unpin model (#3343 supersedes #3330's proximity re-pin): once the user
@@ -3898,10 +3917,28 @@ if(typeof window!=='undefined'){
 (function(){
   const el=document.getElementById('messages');
   if(!el) return;
+  el.addEventListener('pointerdown',(e)=>{
+    if(e.offsetX>=el.clientWidth) _scrollbarDragActive=true;
+  },{passive:true});
+  window.addEventListener('pointerup',()=>{
+    if(!_scrollbarDragActive) return;
+    _scrollbarDragActive=false;
+    _scheduleMessageVirtualizedRender(true);
+  },{passive:true});
+  window.addEventListener('pointercancel',()=>{
+    if(!_scrollbarDragActive) return;
+    _scrollbarDragActive=false;
+    _scheduleMessageVirtualizedRender(true);
+  },{passive:true});
+  window.addEventListener('blur',()=>{ _scrollbarDragActive=false; },{passive:true});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden') _scrollbarDragActive=false;
+  },{passive:true});
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
     _scheduleMessageVirtualizedRender();
-    if(_programmaticScroll) return; // ignore scrolls we triggered ourselves
+    if(_programmaticScroll&&(performance.now()-_programmaticScrollSetAt)>150) _programmaticScroll=false;
+    if(_programmaticScroll) return;
     _markMessageVirtualScrollActive();
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
@@ -4399,7 +4436,7 @@ document.addEventListener('DOMContentLoaded',function(){
 function _setMessageScrollToBottom(){
   const el=$('messages');
   if(!el) return;
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   el.scrollTop=el.scrollHeight;
   _lastScrollTop=el.scrollTop;
   _nearBottomCount=2;
@@ -4412,14 +4449,14 @@ function _setMessageScrollToBottom(){
     // is the authoritative "user scrolled away" signal, so DON'T snap them back
     // or re-pin if so; only release the programmatic-scroll latch.
     if(_messageUserUnpinned || !_scrollPinned || _recentNonMessageScrollIntent()){
-      requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+      _deferClearProgrammaticScroll();
       return;
     }
     el.scrollTop=el.scrollHeight;
     _lastScrollTop=el.scrollTop;
     _nearBottomCount=2;
     _scrollPinned=true;
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    _deferClearProgrammaticScroll();
   });
 }
 function _isMessagePaneNearBottom(threshold=250){
@@ -4533,14 +4570,12 @@ function _settleFinalScroll(token){
     _programmaticScroll=false;
     return;
   }
-  _programmaticScroll=true;
+  _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
   el.scrollTop=el.scrollHeight;
   _lastScrollTop=el.scrollTop;
   _nearBottomCount=2;
   _scrollPinned=true;
-  requestAnimationFrame(()=>{
-    setTimeout(()=>{ _programmaticScroll=false; },0);
-  });
+  _deferClearProgrammaticScroll();
 }
 function scrollIfPinned(){
   if(!_autoScrollFollow) return;
@@ -8953,9 +8988,6 @@ function _onLiveActivityToggle(group){
 function _toggleActivityGroup(summary){
   const group=summary&&summary.closest?summary.closest('.agent-activity-group,.tool-call-group'):null;
   if(!group) return;
-  if(group.getAttribute('data-live-tool-call-group')==='1'&&group.getAttribute('data-live-activity-current')==='1'){
-    return;
-  }
   const collapsed=group.classList.toggle('tool-call-group-collapsed');
   group.classList.toggle('open',!collapsed);
   summary.setAttribute('aria-expanded',String(!collapsed));
@@ -9079,6 +9111,7 @@ function _syncWorklogReasonFromAnchor(group, anchor, displayTextOverride){
   if(anchor){
     anchor.classList.add('assistant-segment-worklog-source');
     anchor.setAttribute('aria-hidden','true');
+    anchor.hidden=true;
   }
 }
 function ensureLiveWorklogContainer(blocks, opts){
@@ -9142,6 +9175,7 @@ function _appendWorklogReason(list, anchor){
   if(anchor){
     anchor.classList.add('assistant-segment-worklog-source');
     anchor.setAttribute('aria-hidden','true');
+    anchor.hidden=true;
   }
   return reason;
 }
@@ -9263,8 +9297,11 @@ function _appendWorklogStep(group, anchor, cards, thinkingText, opts){
 function _anchorSceneRowsForRendering(scene, opts){
   const rows=Array.isArray(scene&&scene.activity_rows)?scene.activity_rows:[];
   const settled=!!(opts&&opts.settled);
+  const live=!settled;
   const out=[];
   const byKey=new Map();
+  const liveProseTextKeys=new Map();
+  const proseTextKey=(value)=>String(value||'').replace(/\s+/g,' ').trim();
   const keyFor=(row)=>{
     if(!row) return '';
     if(row.role==='tool') return `tool:${_anchorSceneToolRowLogicalKey(row)||row.row_id||row.event_id||row.local_id||out.length}`;
@@ -9286,8 +9323,23 @@ function _anchorSceneRowsForRendering(scene, opts){
     const key=keyFor(row);
     if(byKey.has(key)){
       const index=byKey.get(key);
+      if(live&&row.role==='prose'){
+        const textKey=proseTextKey(text);
+        const duplicateIndex=textKey?liveProseTextKeys.get(textKey):undefined;
+        if(duplicateIndex!==undefined&&duplicateIndex!==index) continue;
+        const previousTextKey=proseTextKey(out[index]&&out[index].text);
+        if(previousTextKey&&previousTextKey!==textKey&&liveProseTextKeys.get(previousTextKey)===index){
+          liveProseTextKeys.delete(previousTextKey);
+        }
+        if(textKey) liveProseTextKeys.set(textKey,index);
+      }
       out[index]=row.role==='tool'?_anchorSceneMergeToolRows(out[index],row):row;
     }else{
+      if(live&&row.role==='prose'){
+        const textKey=proseTextKey(text);
+        if(textKey&&liveProseTextKeys.has(textKey)) continue;
+        if(textKey) liveProseTextKeys.set(textKey,out.length);
+      }
       byKey.set(key,out.length);
       out.push(row);
     }
@@ -9571,6 +9623,44 @@ function _projectLiveAnchorActivitySceneForStream(streamId, mode){
     return null;
   }
 }
+function _prepareLiveAnchorScrollRebuildGuard(scrollSnapshot){
+  const messagesEl=$('messages');
+  if(!messagesEl||!scrollSnapshot) return {readerAwayFromBottom:false,release:null};
+  const beforeBottomDistance=Math.max(0,messagesEl.scrollHeight-messagesEl.scrollTop-messagesEl.clientHeight);
+  // Only treat the reader as away if they were ALREADY in a non-follow state.
+  // A pinned follower can transiently have bottomDistance>250 mid-render (the
+  // assistant body grows before the anchor scene re-renders), so keying on a
+  // raw scrollTop>0 here would mis-classify a pinned reader as unpinned and kill
+  // auto-follow. Require an explicit unpin/non-pinned signal instead.
+  const readerAwayFromBottom=beforeBottomDistance>250&&(_messageUserUnpinned||_scrollPinned===false);
+  if(!readerAwayFromBottom) return {readerAwayFromBottom:false,release:null};
+  scrollSnapshot.pinned=false;
+  scrollSnapshot.userUnpinned=true;
+  scrollSnapshot.bottom=beforeBottomDistance;
+  _messageUserUnpinned=true;
+  _scrollPinned=false;
+  _nearBottomCount=0;
+  const msgInner=$('msgInner');
+  if(!msgInner||!msgInner.style) return {readerAwayFromBottom:true,release:null};
+  const guardPreviousKey='liveAnchorScrollGuardPreviousMinHeight';
+  let previousMinHeight=msgInner.style.minHeight||'';
+  if(msgInner.dataset&&Object.prototype.hasOwnProperty.call(msgInner.dataset,guardPreviousKey)){
+    previousMinHeight=msgInner.dataset[guardPreviousKey]||'';
+  }else if(msgInner.dataset){
+    msgInner.dataset[guardPreviousKey]=previousMinHeight;
+  }
+  const guardHeight=Math.max(messagesEl.scrollHeight,Number(scrollSnapshot.scrollHeight)||0);
+  if(guardHeight>0) msgInner.style.minHeight=`${guardHeight}px`;
+  return {
+    readerAwayFromBottom:true,
+    release:()=>{
+      msgInner.style.minHeight=previousMinHeight;
+      if(msgInner.dataset&&msgInner.dataset[guardPreviousKey]===previousMinHeight){
+        delete msgInner.dataset[guardPreviousKey];
+      }
+    },
+  };
+}
 function renderLiveAnchorActivityScene(streamId, scene, opts){
   opts=opts||{};
   if(typeof isCompactWorklogMode==='function'&&!isCompactWorklogMode()) return false;
@@ -9595,11 +9685,13 @@ function renderLiveAnchorActivityScene(streamId, scene, opts){
     ? _captureWorklogDetailDisclosureState(blocks)
     : null;
   const scrollSnapshot=_captureMessageScrollSnapshot();
+  const scrollRebuildGuard=_prepareLiveAnchorScrollRebuildGuard(scrollSnapshot);
   blocks.querySelectorAll('[data-anchor-scene-owner="1"],[data-anchor-scene-row="1"]').forEach(el=>el.remove());
   blocks.querySelectorAll('.live-worklog[data-live-worklog-shell="1"],.tool-worklog-group[data-live-tool-call-group="1"],.tool-call-group[data-live-tool-call-group="1"],.tool-card-row[data-live-tid]:not(.transparent-event-row),.agent-activity-thinking[data-live-thinking="1"],.interim-collapse-toggle').forEach(el=>el.remove());
   blocks.querySelectorAll('[data-live-assistant="1"]').forEach(el=>{
     el.classList.add('assistant-segment-worklog-source');
     el.setAttribute('aria-hidden','true');
+    el.hidden=true;
   });
   const group=_anchorSceneWorklogGroup(blocks,{
     live:true,
@@ -9619,7 +9711,16 @@ function renderLiveAnchorActivityScene(streamId, scene, opts){
   _dedupeLiveProcessedWorklogAnchors(turn);
   if(typeof _moveLiveRunStatusToTurnEnd==='function') _moveLiveRunStatusToTurnEnd();
   _restoreMessageScrollSnapshotSameFrame(scrollSnapshot);
-  if(typeof scrollIfPinned==='function') scrollIfPinned();
+  if(scrollRebuildGuard&&scrollRebuildGuard.release){
+    requestAnimationFrame(()=>{
+      scrollRebuildGuard.release();
+      // Only re-restore the unpinned snapshot if the reader is STILL unpinned at
+      // rAF time. If they re-pinned between guard-engage and this frame, the
+      // stale re-restore would yank them back off the bottom (Opus gate finding).
+      if(_messageUserUnpinned) _restoreMessageScrollSnapshotSameFrame(scrollSnapshot);
+    });
+  }
+  if(!scrollRebuildGuard.readerAwayFromBottom&&typeof scrollIfPinned==='function') scrollIfPinned();
   return true;
 }
 function _renderLiveAnchorActivitySceneForStream(streamId, sessionId, opts){
@@ -9664,6 +9765,7 @@ function _renderSettledAnchorSceneTransparentForMessage(message, segment, rawIdx
     if(Number.isFinite(idx)&&idx<rawIdx){
       node.classList.add('assistant-segment-worklog-source');
       node.setAttribute('aria-hidden','true');
+      node.hidden=true;
     }
   });
   let wrote=false;
@@ -9696,6 +9798,7 @@ function _renderSettledAnchorSceneForMessage(message, segment, rawIdx){
     if(Number.isFinite(idx)&&idx<rawIdx){
       node.classList.add('assistant-segment-worklog-source');
       node.setAttribute('aria-hidden','true');
+      node.hidden=true;
     }
   });
   blocks.querySelectorAll('.tool-worklog-group:not([data-anchor-scene-owner="1"]),.tool-call-group:not([data-anchor-scene-owner="1"]),.agent-activity-thinking:not([data-anchor-scene-row="1"]),.wl-reason').forEach(el=>el.remove());
@@ -9845,15 +9948,9 @@ function ensureActivityGroup(inner, opts){
   if(opts.turnStartedAt!==undefined&&opts.turnStartedAt!==null) group.setAttribute('data-turn-started-at',String(opts.turnStartedAt));
   const summary=group.querySelector('.tool-worklog-summary,.tool-call-group-summary');
   if(summary){
-    if(live){
-      summary.setAttribute('data-live-summary-static','1');
-      summary.setAttribute('aria-disabled','true');
-      summary.disabled=true;
-    }else{
-      summary.removeAttribute('data-live-summary-static');
-      summary.removeAttribute('aria-disabled');
-      summary.disabled=false;
-    }
+    summary.removeAttribute('data-live-summary-static');
+    summary.removeAttribute('aria-disabled');
+    summary.disabled=false;
   }
   const anchor=opts.anchor||null;
   if(anchor&&anchor.parentElement===inner&&group.parentElement===inner){
@@ -10861,7 +10958,7 @@ function _restoreMessageScrollSnapshot(snapshot){
       : false;
   }
   if(!restoredViaAnchor){
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     el.scrollTop=Math.max(0,Math.min(Number(snapshot.top)||0,maxTop));
   }
   // Sync _lastScrollTop after programmatic restore so sticky-unpin does not false-trigger (#1731).
@@ -10887,7 +10984,8 @@ function _restoreMessageScrollSnapshot(snapshot){
     }
   }
   if(!restoredViaAnchor){
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+    else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   }
 }
 function _restoreMessageScrollSnapshotSameFrame(snapshot){
@@ -10907,7 +11005,7 @@ function _restoreMessageScrollSnapshotSameFrame(snapshot){
     const target=(snapshot.pinned===true&&Number.isFinite(bottom))
       ? maxTop-Math.max(0,bottom)
       : Number(snapshot.top)||0;
-    _programmaticScroll=true;
+    _programmaticScroll=true;_programmaticScrollSetAt=performance.now();
     el.scrollTop=Math.max(0,Math.min(target,maxTop));
   }
   _lastScrollTop=el.scrollTop;
@@ -10921,7 +11019,8 @@ function _restoreMessageScrollSnapshotSameFrame(snapshot){
     _nearBottomCount=0;
   }
   if(!restoredViaAnchor){
-    requestAnimationFrame(()=>{ setTimeout(()=>{_programmaticScroll=false;},0); });
+    if(typeof _deferClearProgrammaticScroll==='function') _deferClearProgrammaticScroll();
+    else requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
   }
 }
 function _renderMessagesWithScrollSnapshot(options){
@@ -11114,6 +11213,15 @@ function renderMessages(options){
     S.session && typeof S.session.compression_anchor_summary==='string'
   ) ? S.session.compression_anchor_summary.trim() : '';
   const worklogDetailDisclosureState=_captureWorklogDetailDisclosureState(inner);
+  _recycleStash.clear();
+  if(_msgNodeRecycleEnabled){
+    for(const child of Array.from(inner.children)){
+      const key=child.dataset&&(child.dataset.recycleKey||child.dataset.msgIdx);
+      if(!key) continue;
+      if(child.id==='liveAssistantTurn'||child.querySelector&&child.querySelector('#liveAssistantTurn')) continue;
+      _recycleStash.set(Number(key), child);
+    }
+  }
   inner.innerHTML='';
   const compressionNode=compressionState?_compressionCardsNode(compressionState):null;
   const {message:referenceMessage, rawIdx:referenceMessageRawIdx}=_latestCompressionReferenceMessage(
@@ -11381,22 +11489,54 @@ function renderMessages(options){
 
     if(isUser){
       currentAssistantTurn=null;
-      const row=document.createElement('div');
-      row.className='msg-row';
-      row.id=_userMessageDomId(rawIdx);
-      row.dataset.msgIdx=rawIdx;
-      row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
-      row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
-      row.dataset.role='user';
-      row.dataset.rawText=String(displayContent).trim();
-      row.innerHTML=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+      let row=_msgNodeRecycleEnabled?_recycleStash.get(rawIdx):null;
+      if(row&&(!row.classList.contains('msg-row')||row.classList.contains('assistant-turn'))) row=null;
+      const newRawText=String(displayContent).trim();
+      const nextRowHtml=`${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`;
+      if(row){
+        row.id=_userMessageDomId(rawIdx);
+        row.dataset.msgIdx=rawIdx;
+        row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
+        row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
+        row.dataset.role='user';
+        delete row.dataset.editing;
+        if(row.dataset.rawText!==newRawText||row.innerHTML!==nextRowHtml){
+          row.dataset.rawText=newRawText;
+          row.innerHTML=nextRowHtml;
+        }
+      }else{
+        row=document.createElement('div');
+        row.className='msg-row';
+        row.id=_userMessageDomId(rawIdx);
+        row.dataset.msgIdx=rawIdx;
+        row.dataset.sessionMsgIdx=_messageSessionIndexForRawIdx(rawIdx);
+        row.dataset.messageAnchorKey=_messageViewportAnchorKeyForMessage(m);
+        row.dataset.role='user';
+        row.dataset.rawText=newRawText;
+        row.innerHTML=nextRowHtml;
+      }
       inner.appendChild(row);
       userRows.set(rawIdx, row);
       continue;
     }
 
     if(!currentAssistantTurn){
-      currentAssistantTurn=_createAssistantTurn(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+      let recycled=_msgNodeRecycleEnabled?_recycleStash.get(rawIdx):null;
+      if(recycled&&!recycled.classList.contains('assistant-turn')) recycled=null;
+      if(recycled){
+        const blocks=_assistantTurnBlocks(recycled);
+        if(blocks) blocks.innerHTML='';
+        recycled.removeAttribute('data-transparent-turn-collapsed');
+        recycled.removeAttribute('data-transparent-turn-toggle-bound');
+        const role=recycled.querySelector('.msg-role.assistant');
+        if(role) role.outerHTML=_assistantRoleHtml(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+        currentAssistantTurn=recycled;
+      }else{
+        currentAssistantTurn=_createAssistantTurn(tsTitle, isTpsDisplayEnabled()?_formatTurnTps(m._turnTps):'');
+      }
+      currentAssistantTurn.dataset.role='assistant';
+      if(S.session) currentAssistantTurn.dataset.sessionId=S.session.session_id;
+      currentAssistantTurn.dataset.recycleKey=rawIdx;
       inner.appendChild(currentAssistantTurn);
     }
     const seg=document.createElement('div');
@@ -11411,6 +11551,7 @@ function renderMessages(options){
     if(messageBelongsInWorklog){
       seg.classList.add('assistant-segment-worklog-source');
       seg.setAttribute('aria-hidden','true');
+      seg.hidden=true;
     }
     if(m._live){
       currentAssistantTurn.id='liveAssistantTurn';
@@ -12148,6 +12289,7 @@ function renderMessages(options){
           if(!(seg.textContent||'').trim()) continue;
           seg.classList.remove('assistant-segment-worklog-source');
           seg.removeAttribute('aria-hidden');
+          seg.hidden=false;
         }
       }
     }
@@ -12273,6 +12415,7 @@ function renderMessages(options){
     }
   }
   _updateMessageVirtualMeasurements(renderVisWithIdx, renderVisibleIdxs, virtualWindow);
+  _recycleStash.clear();
 }
 
 function _toolDisplayName(tc){
@@ -13364,6 +13507,34 @@ function _loadJsyamlThen(cb){
   document.head.appendChild(s);
 }
 
+// ── JSON/YAML structured code-block default-view configuration (#484) ──
+// Read the user's configured default-view mode for valid JSON/YAML fenced
+// blocks. Falls back to 'auto' for any missing/invalid value so the renderer
+// stays safe before settings load and in non-browser test contexts.
+function _structuredCodeMode(){
+  const m=(typeof window!=='undefined')?window._structuredCodeDefaultView:undefined;
+  return (m==='on'||m==='off'||m==='auto')?m:'auto';
+}
+// Read the configured 'auto'-mode line threshold, clamped to a sane integer
+// range. Invalid/missing values fall back to 10 (the original hardcoded value).
+function _structuredCodeThreshold(){
+  const raw=(typeof window!=='undefined')?window._structuredCodeAutoTreeLines:undefined;
+  const n=parseInt(raw,10);
+  return (Number.isFinite(n)&&n>=1&&n<=1000)?n:10;
+}
+// Pure decision helper: should a structured block default to Tree view?
+// Factored out so the (mode, threshold, lineCount) contract is unit-testable.
+//   mode 'on'   => always Tree
+//   mode 'off'  => always Raw
+//   mode 'auto' => Tree only when lineCount >= threshold (threshold sanitized,
+//                  fallback 10)
+function _structuredCodeShowTree(mode,threshold,lineCount){
+  if(mode==='on') return true;
+  if(mode==='off') return false;
+  const th=(Number.isFinite(threshold)&&threshold>=1&&threshold<=1000)?threshold:10;
+  return lineCount>=th;
+}
+
 function initTreeViews(container){
   const root=container||document;
   root.querySelectorAll('.code-tree-wrap:not([data-tree-init])').forEach(wrap=>{
@@ -13401,8 +13572,11 @@ function initTreeViews(container){
       return; // leave as raw view
     }
     const lineCount=rawText.split('\n').length;
-    // Default to raw for short blocks (<10 lines), tree for longer
-    const showTree=lineCount>=10;
+    // Default view is user-configurable (#484 follow-up). 'on' => always Tree,
+    // 'off' => always Raw, 'auto' => Tree only when the block is >= the
+    // configured line threshold (default 10, preserving the original behavior).
+    // The per-block Raw/Tree toggle below always remains available regardless.
+    const showTree=_structuredCodeShowTree(_structuredCodeMode(),_structuredCodeThreshold(),lineCount);
     // Build tree DOM
     const treeDiv=document.createElement('div');
     treeDiv.className='tree-view'+(showTree?'':' tree-hidden');
@@ -14631,18 +14805,27 @@ function _renderTreeItems(container, entries, depth){
     el.style.paddingLeft=(8+depth*16)+'px';
     el.setAttribute('draggable','true');
     el.dataset.wsType=item.type;
-    el.oncontextmenu=(e)=>{e.preventDefault();e.stopPropagation();_showFileContextMenu(e,item);};
+    el.oncontextmenu=(e)=>{
+      const grant=typeof _workspaceEscapeGrantForPath==='function' ? _workspaceEscapeGrantForPath(item.path) : null;
+      const isDirRow=item.type==='dir'||(item.type==='symlink'&&item.is_dir);
+      if(grant&&!isDirRow){e.preventDefault();e.stopPropagation();return;}
+      e.preventDefault();e.stopPropagation();_showFileContextMenu(e,item);
+    };
     el.ondragstart=(e)=>{e.dataTransfer.setData('application/ws-path',item.path);e.dataTransfer.setData('application/ws-type',item.type);e.dataTransfer.effectAllowed='copy';el.classList.add('dragging');};
     el.ondragend=()=>{el.classList.remove('dragging');_clearWorkspaceMoveDragOver();};
 
     const isLk = item.type === 'symlink';
     const isExternalLink = isLk && item.target_outside_workspace;
+    const escapeGrant = typeof _workspaceEscapeGrantForPath === 'function' ? _workspaceEscapeGrantForPath(item.path) : null;
+    const exactEscapeGrant = typeof _workspaceEscapeExactGrant === 'function' ? _workspaceEscapeExactGrant(item.path) : null;
+    const isReadOnlyEscape = !!escapeGrant;
+    const isNestedEscape = !!escapeGrant && !exactEscapeGrant;
     // External symlinks are display-only: not expandable, not openable.
     // The read gate (safe_resolve_ws) still blocks navigation through them.
     const isDirLike = !isExternalLink && (item.type === 'dir' || (isLk && item.is_dir));
     const isFileLike = !isExternalLink && !isDirLike;
     el.dataset.wsIsDir = String(isDirLike);
-    if(isExternalLink){el.removeAttribute('draggable');el.ondragstart=null;}
+    if(isExternalLink || isReadOnlyEscape){el.removeAttribute('draggable');el.ondragstart=null;}
 
     if(isDirLike){
       // Toggle arrow for directories
@@ -14678,8 +14861,21 @@ function _renderTreeItems(container, entries, depth){
     // (the "Double-click to rename" hint here would be misleading). #1710.
     if(isLk && item.target)
       nameEl.title = t('symlink_link_to').replace('{target}', () => elideMiddle(item.target));
+    else if(isExternalLink)
+      nameEl.title = (typeof isReadOnlyEscape!=='undefined'
+        ? isReadOnlyEscape
+        : (typeof _workspaceEscapeGrantForPath==='function' ? !!_workspaceEscapeGrantForPath(item.path) : false))
+        ? t('external_link_read_only')
+        : t('external_link_open_confirm');
+    else if(typeof isReadOnlyEscape!=='undefined'
+      ? isReadOnlyEscape
+      : (typeof _workspaceEscapeGrantForPath==='function' ? !!_workspaceEscapeGrantForPath(item.path) : false))
+      nameEl.title = t('external_link_read_only');
     else if(!isDirLike)
       nameEl.title = t('double_click_rename');
+    const nameIsReadOnlyEscape=typeof isReadOnlyEscape!=='undefined'
+      ? isReadOnlyEscape
+      : (typeof _workspaceEscapeGrantForPath==='function' ? !!_workspaceEscapeGrantForPath(item.path) : false);
     // Single-click opens (file) or expand-toggles (dir) but is debounced 300ms so a
     // double-click can cancel it and trigger rename instead. Without the debounce, the
     // click bubbles to el.onclick before dblclick can fire — that's #1698. Without the
@@ -14699,8 +14895,12 @@ function _renderTreeItems(container, entries, depth){
       if(_nameClickTimer){clearTimeout(_nameClickTimer);_nameClickTimer=null;}
       // For directories, double-click navigates (breadcrumb view)
       if(isDirLike){loadDir(item.path);return;}
-      // External symlinks: show informational dialog, not rename
-      if(isExternalLink){if(typeof el.onclick==='function')el.onclick(e);return;}
+      // Escape-root rows remain browse-only, nested escape rows stay display-only.
+      if(nameIsReadOnlyEscape){
+        if(isExternalLink){if(typeof el.onclick==='function')el.onclick(e);return;}
+        openFile(item.path);
+        return;
+      }
       const inp=document.createElement('input');
       inp.className='file-rename-input';inp.value=item.name;
       inp.onclick=(e2)=>e2.stopPropagation();
@@ -14755,11 +14955,13 @@ function _renderTreeItems(container, entries, depth){
 
     // Delete button -- for file-like rows and directory-like rows
     if(isFileLike){
-      const del=document.createElement('button');
-      del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
-      del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceFile(item.path,item.name);};
-      el.appendChild(del);
-    }else if(isDirLike){
+      if(!isReadOnlyEscape){
+        const del=document.createElement('button');
+        del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
+        del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceFile(item.path,item.name);};
+        el.appendChild(del);
+      }
+    }else if(isDirLike&& !isReadOnlyEscape){
       const del=document.createElement('button');
       del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
       del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceDir(item.path,item.name);};
@@ -14767,8 +14969,10 @@ function _renderTreeItems(container, entries, depth){
     }
 
     if(isDirLike){
-      _bindWorkspaceMoveDropTarget(el,item.path);
-      _bindWorkspaceOsUploadDropTarget(el,item.path);
+      if(!isReadOnlyEscape){
+        _bindWorkspaceMoveDropTarget(el,item.path);
+        _bindWorkspaceOsUploadDropTarget(el,item.path);
+      }
       // Single-click toggles expand/collapse
       el.onclick=async(e)=>{
         e.stopPropagation();
@@ -14782,7 +14986,7 @@ function _renderTreeItems(container, entries, depth){
           // Fetch children if not cached
           if(!S._dirCache[item.path]){
             try{
-              const data=await api(`/api/list?session_id=${encodeURIComponent(S.session.session_id)}&path=${encodeURIComponent(item.path)}`);
+              const data=await api(_workspaceRouteForPath(item.path, 'list'));
               S._dirCache[item.path]=data.entries||[];
             }catch(e2){S._dirCache[item.path]=[];}
           }
@@ -14791,18 +14995,25 @@ function _renderTreeItems(container, entries, depth){
       };
     }else if(isExternalLink){
       // Display-only: the link points outside the workspace. We do NOT disclose
-      // the resolved outside path (#4581 hardening) and do NOT call openFile —
-      // the read gate (safe_resolve_ws) blocks navigation through the link.
+      // the resolved outside path (#4581 hardening) and do NOT recursively
+      // authorize nested escape rows under an already-authorized external root.
       el.onclick=async(e)=>{
         e.stopPropagation();
-        await showConfirmDialog({
-          title:item.name,
-          message:t('external_link_open_confirm'),
-          confirmLabel:t('dialog_confirm_btn'),
-          danger:false,
-          hideCancel:true,
-          focusCancel:false,
-        });
+        if(isNestedEscape){
+          await showConfirmDialog({
+            title:item.name,
+            message:t('external_link_read_only'),
+            confirmLabel:t('dialog_confirm_btn'),
+            danger:false,
+            hideCancel:true,
+            focusCancel:false,
+          });
+          return;
+        }
+        const grant = await authorizeWorkspaceEscapeNavigation(item);
+        if(!grant) return;
+        if(grant.isDir) await loadDir(item.path);
+        else await openFile(item.path);
       };
     }else{
       el.onclick=async()=>openFile(item.path);
@@ -14828,6 +15039,10 @@ function _renderTreeItems(container, entries, depth){
 
 async function deleteWorkspaceDir(relPath, name){
   if(!S.session)return;
+  if(typeof _workspacePathIsReadOnly==='function'&&_workspacePathIsReadOnly(relPath)){
+    showToast(t('external_link_read_only'), 2000);
+    return;
+  }
   const ok=await showConfirmDialog({title:t('delete_dir_confirm',name),message:'',confirmLabel:'Delete',danger:true,focusCancel:true});
   if(!ok)return;
   try{
@@ -14851,83 +15066,86 @@ function _showFileContextMenu(e, item){
   menu.style.top=(e.clientY+100>vh?e.clientY-100:e.clientY)+'px';
   const isDirLike=item.type==='dir'||(item.type==='symlink'&&item.is_dir);
   const targetDir=isDirLike ? item.path : _workspaceParentDir(item.path);
+  const isReadOnlyEscape=typeof _workspaceEscapeGrantForPath==='function' ? !!_workspaceEscapeGrantForPath(item.path) : false;
 
-  menu.appendChild(_workspaceContextMenuItem(t('new_file'),async()=>{
-    menu.remove();
-    await promptNewFile(targetDir);
-  }));
+  if(!isReadOnlyEscape){
+    menu.appendChild(_workspaceContextMenuItem(t('new_file'),async()=>{
+      menu.remove();
+      await promptNewFile(targetDir);
+    }));
 
-  menu.appendChild(_workspaceContextMenuItem(t('new_folder'),async()=>{
-    menu.remove();
-    await promptNewFolder(targetDir);
-  }));
+    menu.appendChild(_workspaceContextMenuItem(t('new_folder'),async()=>{
+      menu.remove();
+      await promptNewFolder(targetDir);
+    }));
 
-  const createSep=document.createElement('hr');
-  createSep.style.cssText='border:none;border-top:1px solid var(--border);margin:4px 0;';
-  menu.appendChild(createSep);
+    const createSep=document.createElement('hr');
+    createSep.style.cssText='border:none;border-top:1px solid var(--border);margin:4px 0;';
+    menu.appendChild(createSep);
 
-  // Rename
-  const renameItem=document.createElement('div');
-  renameItem.textContent=t('rename_title');
-  renameItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
-  renameItem.onmouseenter=()=>renameItem.style.background='var(--hover-bg)';
-  renameItem.onmouseleave=()=>renameItem.style.background='';
-  renameItem.onclick=()=>{menu.remove();_inlineRenameFileItem(item);};
-  menu.appendChild(renameItem);
+    // Rename
+    const renameItem=document.createElement('div');
+    renameItem.textContent=t('rename_title');
+    renameItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
+    renameItem.onmouseenter=()=>renameItem.style.background='var(--hover-bg)';
+    renameItem.onmouseleave=()=>renameItem.style.background='';
+    renameItem.onclick=()=>{menu.remove();_inlineRenameFileItem(item);};
+    menu.appendChild(renameItem);
 
-  // Reveal in File Manager
-  const revealItem=document.createElement('div');
-  revealItem.textContent=t('reveal_in_finder');
-  revealItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
-  revealItem.onmouseenter=()=>revealItem.style.background='var(--hover-bg)';
-  revealItem.onmouseleave=()=>revealItem.style.background='';
-  revealItem.onclick=async()=>{menu.remove();try{await api('/api/file/reveal',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});}catch(err){showToast(t('reveal_failed')+(err.message||err));}};
-  menu.appendChild(revealItem);
+    // Reveal in File Manager
+    const revealItem=document.createElement('div');
+    revealItem.textContent=t('reveal_in_finder');
+    revealItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
+    revealItem.onmouseenter=()=>revealItem.style.background='var(--hover-bg)';
+    revealItem.onmouseleave=()=>revealItem.style.background='';
+    revealItem.onclick=async()=>{menu.remove();try{await api('/api/file/reveal',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});}catch(err){showToast(t('reveal_failed')+(err.message||err));}};
+    menu.appendChild(revealItem);
 
-  // Open in VS Code (#2735)
-  const vscodeItem=document.createElement('div');
-  vscodeItem.textContent=t('open_in_vscode');
-  vscodeItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
-  vscodeItem.onmouseenter=()=>vscodeItem.style.background='var(--hover-bg)';
-  vscodeItem.onmouseleave=()=>vscodeItem.style.background='';
-  vscodeItem.onclick=async()=>{menu.remove();try{await api('/api/file/open-vscode',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});}catch(err){showToast(t('open_in_vscode_failed')+(err.message||err));}};
-  menu.appendChild(vscodeItem);
+    // Open in VS Code (#2735)
+    const vscodeItem=document.createElement('div');
+    vscodeItem.textContent=t('open_in_vscode');
+    vscodeItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
+    vscodeItem.onmouseenter=()=>vscodeItem.style.background='var(--hover-bg)';
+    vscodeItem.onmouseleave=()=>vscodeItem.style.background='';
+    vscodeItem.onclick=async()=>{menu.remove();try{await api('/api/file/open-vscode',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});}catch(err){showToast(t('open_in_vscode_failed')+(err.message||err));}};
+    menu.appendChild(vscodeItem);
 
-  // Copy file path — resolves the absolute on-disk path on the server (so the
-  // user gets the full /home/.../workspace/foo.py rather than the relative
-  // path the file tree shows) and writes it to the OS clipboard. Useful for
-  // pasting into terminals, editors, or other apps without taking the slower
-  // Reveal-in-Finder round trip.
-  const copyPathItem=document.createElement('div');
-  copyPathItem.textContent=t('copy_file_path');
-  copyPathItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
-  copyPathItem.onmouseenter=()=>copyPathItem.style.background='var(--hover-bg)';
-  copyPathItem.onmouseleave=()=>copyPathItem.style.background='';
-  copyPathItem.onclick=async()=>{
-    menu.remove();
-    try{
-      const r=await api('/api/file/path',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});
-      const abs=(r&&r.path)||item.path;
+    // Copy file path — resolves the absolute on-disk path on the server (so the
+    // user gets the full /home/.../workspace/foo.py rather than the relative
+    // path the file tree shows) and writes it to the OS clipboard. Useful for
+    // pasting into terminals, editors, or other apps without taking the slower
+    // Reveal-in-Finder round trip.
+    const copyPathItem=document.createElement('div');
+    copyPathItem.textContent=t('copy_file_path');
+    copyPathItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--text);';
+    copyPathItem.onmouseenter=()=>copyPathItem.style.background='var(--hover-bg)';
+    copyPathItem.onmouseleave=()=>copyPathItem.style.background='';
+    copyPathItem.onclick=async()=>{
+      menu.remove();
       try{
-        await navigator.clipboard.writeText(abs);
-        showToast(t('path_copied'));
-      }catch(clipErr){
-        const ta=document.createElement('textarea');
-        ta.value=abs;
-        ta.style.cssText='position:fixed;left:-9999px;top:-9999px;';
-        document.body.appendChild(ta);
-        ta.select();
-        let copied=false;
-        try{copied=document.execCommand('copy');}catch(_){}
-        ta.remove();
-        if(copied) showToast(t('path_copied'));
-        else showToast(t('path_copy_failed')+(clipErr&&clipErr.message?clipErr.message:String(clipErr)));
+        const r=await api('/api/file/path',{method:'POST',body:JSON.stringify({session_id:S.session.session_id,path:item.path})});
+        const abs=(r&&r.path)||item.path;
+        try{
+          await navigator.clipboard.writeText(abs);
+          showToast(t('path_copied'));
+        }catch(clipErr){
+          const ta=document.createElement('textarea');
+          ta.value=abs;
+          ta.style.cssText='position:fixed;left:-9999px;top:-9999px;';
+          document.body.appendChild(ta);
+          ta.select();
+          let copied=false;
+          try{copied=document.execCommand('copy');}catch(_){}
+          ta.remove();
+          if(copied) showToast(t('path_copied'));
+          else showToast(t('path_copy_failed')+(clipErr&&clipErr.message?clipErr.message:String(clipErr)));
+        }
+      }catch(err){
+        showToast(t('path_copy_failed')+(err.message||err));
       }
-    }catch(err){
-      showToast(t('path_copy_failed')+(err.message||err));
-    }
-  };
-  menu.appendChild(copyPathItem);
+    };
+    menu.appendChild(copyPathItem);
+  }
 
   if(isDirLike){
     const dlItem=document.createElement('div');
@@ -14944,16 +15162,18 @@ function _showFileContextMenu(e, item){
     menu.appendChild(dlItem);
   }
 
-  const sep=document.createElement('hr');
-  sep.style.cssText='border:none;border-top:1px solid var(--border);margin:4px 0;';
-  menu.appendChild(sep);
-  const delItem=document.createElement('div');
-  delItem.textContent=t('delete_title');
-  delItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--error,#e94560);';
-  delItem.onmouseenter=()=>delItem.style.background='var(--hover-bg)';
-  delItem.onmouseleave=()=>delItem.style.background='';
-  delItem.onclick=()=>{menu.remove();if(isDirLike)deleteWorkspaceDir(item.path,item.name);else deleteWorkspaceFile(item.path,item.name);};
-  menu.appendChild(delItem);
+  if(!isReadOnlyEscape){
+    const sep=document.createElement('hr');
+    sep.style.cssText='border:none;border-top:1px solid var(--border);margin:4px 0;';
+    menu.appendChild(sep);
+    const delItem=document.createElement('div');
+    delItem.textContent=t('delete_title');
+    delItem.style.cssText='padding:7px 14px;cursor:pointer;font-size:13px;color:var(--error,#e94560);';
+    delItem.onmouseenter=()=>delItem.style.background='var(--hover-bg)';
+    delItem.onmouseleave=()=>delItem.style.background='';
+    delItem.onclick=()=>{menu.remove();if(isDirLike)deleteWorkspaceDir(item.path,item.name);else deleteWorkspaceFile(item.path,item.name);};
+    menu.appendChild(delItem);
+  }
 
   document.body.appendChild(menu);
   const dismiss=()=>{menu.remove();document.removeEventListener('click',dismiss);};
@@ -14962,6 +15182,10 @@ function _showFileContextMenu(e, item){
 
 async function _inlineRenameFileItem(item){
   if(!S.session)return;
+  if(typeof _workspacePathIsReadOnly==='function'&&_workspacePathIsReadOnly(item.path)){
+    showToast(t('external_link_read_only'), 2000);
+    return;
+  }
   const isDirLike=item.type==='dir'||(item.type==='symlink'&&item.is_dir);
   // Pre-fill the input with the current name and select just the stem
   // (everything before the last '.') so the user can immediately retype the
@@ -14995,6 +15219,10 @@ async function _inlineRenameFileItem(item){
 
 async function deleteWorkspaceFile(relPath, name){
   if(!S.session)return;
+  if(typeof _workspacePathIsReadOnly==='function'&&_workspacePathIsReadOnly(relPath)){
+    showToast(t('external_link_read_only'), 2000);
+    return;
+  }
   const _delFile=await showConfirmDialog({title:t('delete_confirm',name),message:'',confirmLabel:'Delete',danger:true,focusCancel:true});
   if(!_delFile) return;
   try{
@@ -15016,6 +15244,10 @@ async function promptNewFile(targetDir = S.currentDir || '.'){
     }catch(e){setStatus(t('create_failed')+e.message);return;}
   }
   if(!S.session)return;
+  if(typeof _workspacePathIsReadOnly==='function'&&_workspacePathIsReadOnly(targetDir)){
+    showToast(t('external_link_read_only'), 2000);
+    return;
+  }
   const targetLabel=_workspaceCreateTargetLabel(targetDir);
   const name=await showPromptDialog({
     title:t('new_file_prompt_title', targetLabel),
@@ -15043,6 +15275,10 @@ async function promptNewFolder(targetDir = S.currentDir || '.'){
     }catch(e){setStatus(t('folder_create_failed')+e.message);return;}
   }
   if(!S.session)return;
+  if(typeof _workspacePathIsReadOnly==='function'&&_workspacePathIsReadOnly(targetDir)){
+    showToast(t('external_link_read_only'), 2000);
+    return;
+  }
   const targetLabel=_workspaceCreateTargetLabel(targetDir);
   const name=await showPromptDialog({
     title:t('new_folder_prompt_title', targetLabel),

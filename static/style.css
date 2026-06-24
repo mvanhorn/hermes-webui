@@ -1256,6 +1256,20 @@
     .skeleton-bar,.skeleton-tree-row .skeleton-glyph{animation:none;background:var(--skeleton-base,color-mix(in srgb,var(--text) 10%,transparent));}
     .skeleton-row,.skeleton-tree-row,.skeleton-group-label{animation:none;}
   }
+  /* #4717: empty-profile skeleton. When the target profile is known to have zero
+     conversations, showSessionListSkeleton() renders a single quiet hint bar
+     instead of a fake content list, so the switch resolves calmly to the real
+     empty state without a misleading "loading conversations" flash. */
+  .skeleton-list-empty{padding:14px 10px;}
+  .skeleton-empty-hint{height:9px;width:42px;border-radius:var(--radius-pill);
+    background:var(--skeleton-base,color-mix(in srgb,var(--text) 8%,transparent));
+    opacity:.4;animation:skeletonEmptyHintFadeIn .22s ease both;}
+  /* Dedicated fade that ENDS at the resting .4 (not .5): the shared
+     skeletonFadeInDim ends at .5 with fill-mode:both, which would override the
+     static opacity:.4 above and leave the animated and reduced-motion paths at
+     different rest opacities. This keeps both at .4. (greptile #4748) */
+  @keyframes skeletonEmptyHintFadeIn{from{opacity:0;}to{opacity:.4;}}
+  @media (prefers-reduced-motion:reduce){.skeleton-empty-hint{animation:none;}}
   .session-item.new-flash{animation:newflash 1.4s ease-out forwards;}
   .session-item.session-list-flip-enter{animation:sessionListFlipIn .28s cubic-bezier(.2,.8,.2,1) backwards;transform-origin:center top;}
   /* Collapsible date group headers */
@@ -3025,14 +3039,7 @@ body.resizing .sidebar{transition:none!important;}
 .tool-worklog-group[data-tool-worklog-group="1"]:not([data-run-activity-group="1"]) .tool-worklog-summary:hover{
   background:transparent;
 }
-.tool-worklog-group[data-live-tool-call-group="1"] .tool-worklog-summary[data-live-summary-static="1"]{
-  cursor:default;
-  opacity:1;
-}
 .tool-worklog-group[data-tool-worklog-group="1"]:not([data-run-activity-group="1"]) .as-dot{
-  display:none;
-}
-.tool-worklog-group[data-live-tool-call-group="1"][data-live-activity-current="1"] .tool-call-group-chevron{
   display:none;
 }
 .tool-worklog-running-label{display:none;color:var(--accent-text);font-family:'SF Mono',ui-monospace,monospace;font-size:12px;font-weight:600;line-height:1.4;}
@@ -5908,6 +5915,17 @@ main.main.showing-insights > #mainInsights{display:flex;overflow-y:auto;}
 }
 .kanban-run-dispatch-btn:hover{
   background:color-mix(in srgb,var(--accent,#FFD700) 24%,transparent);
+}
+.kanban-view-toggle{
+  color:var(--muted);
+}
+.kanban-view-toggle[aria-pressed="true"]{
+  border-color:color-mix(in srgb,var(--accent,#FFD700) 58%,var(--border));
+  background:color-mix(in srgb,var(--accent,#FFD700) 13%,transparent);
+  color:var(--accent,#FFD700);
+}
+.kanban-view-toggle[aria-pressed="true"]:hover{
+  background:color-mix(in srgb,var(--accent,#FFD700) 22%,transparent);
 }
 .kanban-task-preview-body{font-size:12px;color:var(--muted);line-height:1.45;margin-bottom:6px;}
 .kanban-status-actions{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px;}

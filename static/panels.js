@@ -4,7 +4,7 @@ let _kanbanBoard = null;
 let _kanbanLatestEventId = 0;
 let _kanbanPollTimer = null;
 let _kanbanCurrentTaskId = null;
-let _kanbanLanesByProfile = false;
+let _kanbanLanesByProfile = true;
 // Multi-board state. _kanbanCurrentBoard is the slug of the active board
 // the UI is currently viewing. null means "use whatever the server reports
 // as active" (i.e. don't pin a specific board in API calls). The UI
@@ -1550,13 +1550,45 @@ function _kanbanCurrentFilters(){
 }
 
 function _kanbanApplyConfigDefaults(config){
-  if (!config || _kanbanConfigApplied) return;
+  if (!config) return;
+  _kanbanLanesByProfile = config.lane_by_profile === true;
+  syncKanbanViewToggle();
+  if (_kanbanConfigApplied) return;
   if ($('kanbanTenantFilter') && config.default_tenant) $('kanbanTenantFilter').dataset.defaultValue = config.default_tenant;
   if ($('kanbanIncludeArchived') && config.include_archived_by_default === true) $('kanbanIncludeArchived').checked = true;
-  if (config.lane_by_profile === true) _kanbanLanesByProfile = true;
   _kanbanConfigApplied = true;
 }
 let _kanbanConfigApplied = false;
+
+function syncKanbanViewToggle(){
+  const btn = $('btnKanbanViewToggle');
+  if (!btn) return;
+  const consolidated = !_kanbanLanesByProfile;
+  const label = t('kanban_view_consolidated');
+  btn.setAttribute('aria-pressed', consolidated ? 'true' : 'false');
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('data-i18n-title', 'kanban_view_consolidated');
+  btn.setAttribute('data-i18n-aria-label', 'kanban_view_consolidated');
+  if (typeof _setButtonTooltip === 'function') _setButtonTooltip(btn, label);
+  else btn.setAttribute('data-tooltip', label);
+}
+
+async function toggleKanbanViewMode(){
+  const btn = $('btnKanbanViewToggle');
+  const nextLaneByProfile = !_kanbanLanesByProfile;
+  if (btn) btn.disabled = true;
+  try {
+    const saved = await api('/api/kanban/config', {method: 'PATCH', body: JSON.stringify({lane_by_profile: nextLaneByProfile})});
+    _kanbanLanesByProfile = saved.lane_by_profile === true;
+    syncKanbanViewToggle();
+    _kanbanRenderBoard();
+    showToast(t(_kanbanLanesByProfile ? 'kanban_view_lanes_saved' : 'kanban_view_consolidated_saved'));
+  } catch(e) {
+    showToast(t('kanban_view_update_failed') + (e.message || e), 4000, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 
 function _kanbanSetSelectOptions(el, values, allLabelKey){
   if (!el) return;
@@ -5536,6 +5568,7 @@ async function switchToWorkspace(path,name){
     }catch(e){if(typeof setStatus==='function')setStatus(t('switch_failed')+e.message);return;}
     if(!S.session)return;
   }
+  // Workspace mutation during a live turn would desync the active stream context.
   if(S.busy){
     showToast(t('workspace_busy_switch'));
     return;
@@ -5978,7 +6011,7 @@ async function switchToProfile(name) {
     // skeleton, before the new-profile cookie is set) also can't paint the old profile's
     // rows. Cleared right before the switch-owned renderSessionList() and on failure.
     if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(true);
-    if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton();
+    if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton(name);
     // invalidate any in-flight workspace-tree load UNCONDITIONALLY at switch start — even
     // when the panel is closed, loadDir('.') still runs later, and an empty-session switch
     // reuses the same session_id so loadDir's id guard alone can't reject a stale
@@ -7002,6 +7035,44 @@ function _applyTtsEnabled(enabled){
   document.body.classList.toggle('tts-enabled', !!enabled);
 }
 
+// Read + sanitize the JSON/YAML structured code-block default-view controls
+// (#484). mode is one of auto|on|off; lines is clamped to an int 1..1000 with a
+// fallback of 10 (the original hardcoded threshold).
+function _structuredCodeViewFromUi(){
+  const modeSel=$('settingsStructuredCodeMode');
+  const mode=modeSel&&['auto','on','off'].includes(modeSel.value)?modeSel.value:'auto';
+  const linesField=$('settingsStructuredCodeAutoLines');
+  const n=parseInt((linesField||{}).value,10);
+  const lines=(Number.isFinite(n)&&n>=1&&n<=1000)?n:10;
+  return {structured_code_default_view:mode,structured_code_auto_tree_lines:lines};
+}
+
+// Apply the structured code-block settings to runtime globals and re-render the
+// transcript so already-rendered JSON/YAML blocks pick up the new default. The
+// per-block Raw/Tree toggle is unaffected.
+function _applyStructuredCodeViewSettings(mode,lines,rerender){
+  window._structuredCodeDefaultView=['auto','on','off'].includes(mode)?mode:'auto';
+  const n=parseInt(lines,10);
+  window._structuredCodeAutoTreeLines=(Number.isFinite(n)&&n>=1&&n<=1000)?n:10;
+  if(rerender){
+    if(typeof clearMessageRenderCache==='function') clearMessageRenderCache();
+    if(typeof renderMessages==='function') renderMessages({preserveScroll:true});
+  }
+}
+
+// The Auto-threshold input is only meaningful in 'auto' mode; disable it
+// otherwise so the control reads as inactive without hiding it.
+function _syncStructuredCodeLinesEnabled(){
+  const modeSel=$('settingsStructuredCodeMode');
+  const linesField=$('settingsStructuredCodeAutoLines');
+  // Both controls live in the same settings-field and are present together;
+  // if either is missing there's nothing to sync.
+  if(!modeSel||!linesField) return;
+  const isAuto=modeSel.value==='auto';
+  linesField.disabled=!isAuto;
+  linesField.style.opacity=isAuto?'':'0.5';
+}
+
 function _appearancePayloadFromUi(){
   const worklogDetailsExpanded=!!($('settingsWorklogDetailsExpandedDefault')||{}).checked;
   const chatActivityModeSel=$('settingsChatActivityDisplayMode');
@@ -7014,6 +7085,7 @@ function _appearancePayloadFromUi(){
     session_endless_scroll: !!($('settingsSessionEndlessScroll')||{}).checked,
     auto_scroll_follow: !!($('settingsAutoScrollFollow')||{}).checked,
     render_user_markdown: !!($('settingsRenderUserMarkdown')||{}).checked,
+    ..._structuredCodeViewFromUi(),
     show_titlebar_profile: !!($('settingsShowTitlebarProfile')||{}).checked,
     worklog_details_expanded_default: worklogDetailsExpanded,
     activity_feed_expanded_default: worklogDetailsExpanded,
@@ -7102,6 +7174,16 @@ async function _autosaveAppearanceSettings(payload){
     }
     window._sessionEndlessScrollEnabled=!!(saved&&saved.session_endless_scroll);
     window._autoScrollFollow=!saved||saved.auto_scroll_follow!==false;
+    if(saved&&Object.prototype.hasOwnProperty.call(saved,'structured_code_default_view')){
+      // Re-sync from the server-validated/clamped values so the UI and runtime
+      // globals match exactly what was persisted.
+      _applyStructuredCodeViewSettings(saved.structured_code_default_view,saved.structured_code_auto_tree_lines,false);
+      const modeSel=$('settingsStructuredCodeMode');
+      if(modeSel) modeSel.value=window._structuredCodeDefaultView;
+      const linesField=$('settingsStructuredCodeAutoLines');
+      if(linesField) linesField.value=window._structuredCodeAutoTreeLines;
+      _syncStructuredCodeLinesEnabled();
+    }
     if(saved&&payload&&Object.prototype.hasOwnProperty.call(payload,'worklog_details_expanded_default')&&(
       Object.prototype.hasOwnProperty.call(saved,'worklog_details_expanded_default') ||
       Object.prototype.hasOwnProperty.call(saved,'activity_feed_expanded_default')
@@ -7405,6 +7487,34 @@ async function loadSettingsPanel(){
         if(typeof renderMessages==='function') renderMessages();
         _scheduleAppearanceAutosave();
       };
+    }
+    const structuredCodeModeSel=$('settingsStructuredCodeMode');
+    const structuredCodeLinesField=$('settingsStructuredCodeAutoLines');
+    if(structuredCodeModeSel){
+      const mode=['auto','on','off'].includes(settings.structured_code_default_view)?settings.structured_code_default_view:'auto';
+      structuredCodeModeSel.value=mode;
+      const lines=parseInt(settings.structured_code_auto_tree_lines,10);
+      const safeLines=(Number.isFinite(lines)&&lines>=1&&lines<=1000)?lines:10;
+      if(structuredCodeLinesField) structuredCodeLinesField.value=safeLines;
+      _applyStructuredCodeViewSettings(mode,safeLines,false);
+      _syncStructuredCodeLinesEnabled();
+      structuredCodeModeSel.onchange=function(){
+        const cfg=_structuredCodeViewFromUi();
+        _applyStructuredCodeViewSettings(cfg.structured_code_default_view,cfg.structured_code_auto_tree_lines,true);
+        _syncStructuredCodeLinesEnabled();
+        _scheduleAppearanceAutosave();
+      };
+      if(structuredCodeLinesField){
+        // Commit on change (blur / Enter / spinner) rather than every keystroke,
+        // so a long transcript is not rebuilt per digit typed. Only re-render in
+        // auto mode, where the threshold actually affects the default view.
+        structuredCodeLinesField.addEventListener('change',function(){
+          const cfg=_structuredCodeViewFromUi();
+          structuredCodeLinesField.value=cfg.structured_code_auto_tree_lines;
+          _applyStructuredCodeViewSettings(cfg.structured_code_default_view,cfg.structured_code_auto_tree_lines,cfg.structured_code_default_view==='auto');
+          _scheduleAppearanceAutosave();
+        },{once:false});
+      }
     }
     const showTitlebarProfileCb=$('settingsShowTitlebarProfile');
     if(showTitlebarProfileCb){
@@ -9091,6 +9201,9 @@ function _applySavedSettingsUi(saved, body, opts){
   window._busyInputMode=body.busy_input_mode||'queue';
   window._sessionEndlessScrollEnabled=!!body.session_endless_scroll;
   window._autoScrollFollow=body.auto_scroll_follow!==false;
+  if(Object.prototype.hasOwnProperty.call(body,'structured_code_default_view')){
+    _applyStructuredCodeViewSettings(body.structured_code_default_view,body.structured_code_auto_tree_lines,false);
+  }
   window._botName=body.bot_name||'Hermes';
   if(typeof applyBotName==='function') applyBotName();
   if(typeof setLocale==='function') setLocale(language);
@@ -9612,6 +9725,7 @@ async function saveSettings(andClose){
   body.chat_activity_display_mode=(($('settingsChatActivityDisplayMode')||{}).value==='transparent_stream')?'transparent_stream':'compact_worklog';
   body.auto_scroll_follow=!!($('settingsAutoScrollFollow')||{}).checked;
   body.render_user_markdown=!!($('settingsRenderUserMarkdown')||{}).checked;
+  Object.assign(body,_structuredCodeViewFromUi());
   body.language=language;
   body.show_token_usage=showTokenUsage;
   body.show_quota_chip=showQuotaChip===true;

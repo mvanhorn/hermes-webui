@@ -2158,6 +2158,11 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
     }
     window._sessionJumpButtonsEnabled=!!s.session_jump_buttons;
     window._renderUserMarkdown=!!s.render_user_markdown;
+    // JSON/YAML structured code-block default view (#484): auto | on | off,
+    // plus the 'auto'-mode line threshold (sanitized int 1..1000, fallback 10).
+    window._structuredCodeDefaultView=['on','off','auto'].includes(s.structured_code_default_view)?s.structured_code_default_view:'auto';
+    const _sctLines=parseInt(s.structured_code_auto_tree_lines,10);
+    window._structuredCodeAutoTreeLines=(Number.isFinite(_sctLines)&&_sctLines>=1&&_sctLines<=1000)?_sctLines:10;
     // Reconcile appearance: prefer localStorage (what the user last saw) over
     // the server.  If they diverge (e.g. a previous autosave POST failed),
     // push the localStorage values back to the server so settings.json stays
@@ -2227,6 +2232,8 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
     window._workspaceTodosTab=false;
     if(typeof _applyWorkspaceTodosTabVisibility==='function') _applyWorkspaceTodosTabVisibility();
     window._sessionJumpButtonsEnabled=false;
+    window._structuredCodeDefaultView='auto';
+    window._structuredCodeAutoTreeLines=10;
     window._sidebarDensity='compact';
     window._pinnedSessionsLimit=3;
     window._busyInputMode='queue';

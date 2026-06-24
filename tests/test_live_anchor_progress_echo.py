@@ -27,19 +27,30 @@ def test_interim_reasoning_echo_cleans_live_and_anchor_thinking():
     assert "const reasoningEcho=!!(d&&d.reasoning_echo);" in body
     assert "if(reasoningEcho) _stripLiveReasoningEcho(visible);" in body
     assert "function _stripAnchorReasoningEcho(visible)" in MESSAGES
+    assert "function _removeLiveReasoningEchoRows(visible)" in MESSAGES
     assert "events.splice(i,1);" in MESSAGES
+    assert '.agent-activity-thinking[data-anchor-scene-row="1"]' in MESSAGES
+    assert "_removeLiveReasoningEchoRows(visible)" in MESSAGES
     assert "reasoningText=durable.text;" in MESSAGES
     assert "liveReasoningText=live.text;" in MESSAGES
 
 
-def test_interim_anchor_render_runs_after_legacy_segment_flush():
+def test_interim_anchor_render_runs_after_legacy_segment_flush_without_duplicate_process_row():
     body = _interim_listener_body()
 
-    flush_idx = body.index("_flushPendingSegmentRender({force:true});")
+    flush_idx = body.index("_flushPendingSegmentRender({force:true,skipAnchorProcessProse:true});")
     anchor_idx = body.index("_applyToAnchor('interim_assistant',d,e);")
+    flush_fn_start = MESSAGES.index("function _flushPendingSegmentRender")
+    flush_fn = MESSAGES[flush_fn_start : MESSAGES.index("function _resetAssistantSegment", flush_fn_start)]
+
+    assert "const skipAnchorProcessProse=!!(options&&options.skipAnchorProcessProse);" in flush_fn
+    assert "if(!skipAnchorProcessProse) _upsertAnchorProcessProse(displayText,{sealed:force});" in flush_fn
     assert flush_idx < anchor_idx, (
         "Anchor live scene must render after the legacy interim segment is flushed, "
         "so renderLiveAnchorActivityScene can hide that source segment immediately."
+    )
+    assert "_flushPendingSegmentRender({force:true});" in body, (
+        "already_streamed interim updates must still flush the token-owned prose row."
     )
 
 

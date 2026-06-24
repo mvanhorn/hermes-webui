@@ -1597,6 +1597,8 @@ def _session_list_cache_key(
     show_previous_messaging_sessions: bool,
     show_cron_sessions: bool,
     include_archived: bool = False,
+    exclude_hidden: bool = False,
+    visible_only: bool = False,
     source_filter: str | None = None,
     sidebar_source: str | None = None,
 ) -> tuple:
@@ -1607,6 +1609,8 @@ def _session_list_cache_key(
         bool(show_previous_messaging_sessions),
         bool(show_cron_sessions),
         bool(include_archived),
+        bool(exclude_hidden),
+        bool(visible_only),
         source_filter,
         sidebar_source,
     )
@@ -1926,11 +1930,38 @@ def _build_session_list_cache_payload(
     show_previous_messaging_sessions: bool,
     show_cron_sessions: bool,
     include_archived: bool = False,
+    exclude_hidden: bool = False,
+    visible_only: bool = False,
     source_filter: str | None = None,
     sidebar_source: str | None = None,
     diag=None,
 ) -> dict:
     diag_stage = diag.stage if diag is not None else lambda *_a, **_k: None
+
+    def _session_has_server_visible_messages(session: dict) -> bool:
+        """Return True when a non-active sidebar row has a visibility signal.
+
+        Keep this mirror of the non-active server filter narrow and local to
+        route behavior so model-layer behavior remains unchanged.
+        """
+        if not isinstance(session, dict):
+            return False
+        if _numeric_count(session.get("message_count")) > 0:
+            return True
+
+        attention = session.get("attention")
+        if not (isinstance(attention, dict) and attention.get("kind")):
+            attention = _session_attention_summary(str(session.get("session_id") or ""))
+        if isinstance(attention, dict) and attention.get("kind"):
+            if _numeric_count(attention.get("count")) > 0:
+                return True
+
+        return bool(
+            session.get("is_streaming")
+            or session.get("active_stream_id")
+            or session.get("pending_user_message")
+            or session.get("has_pending_user_message")
+        )
 
     def _all_sessions_for_sidebar():
         try:
@@ -2090,6 +2121,16 @@ def _build_session_list_cache_payload(
         diag_stage("cli_cap")
         archived_scoped = _cap_recent_cli_sessions(archived_scoped, cli_cap=CLI_VISIBLE_SESSION_CAP)
         visible_scoped = _cap_recent_cli_sessions(visible_scoped, cli_cap=CLI_VISIBLE_SESSION_CAP)
+    if visible_only:
+        archived_scoped = [
+            s for s in archived_scoped if _session_has_server_visible_messages(s)
+        ]
+        visible_scoped = [
+            s for s in visible_scoped if _session_has_server_visible_messages(s)
+        ]
+    if exclude_hidden:
+        archived_scoped = [s for s in archived_scoped if not s.get("default_hidden")]
+        visible_scoped = [s for s in visible_scoped if not s.get("default_hidden")]
     archived_webui_count = sum(
         1 for s in archived_scoped
         if s.get("archived") and not _is_cli_session_for_settings(s)
@@ -2142,8 +2183,20 @@ def _build_session_list_cache_payload(
 def _session_list_payload_to_response(payload: dict) -> dict:
     safe_merged = []
     runtime_rows = _session_list_cache_overlay_runtime_rows(payload.get("sessions", []) or [])
+    # Read the redaction setting ONCE for the whole response and thread it through
+    # every row, instead of letting each row's _redact_text() re-read settings.json
+    # from disk (per title). The _sidebar_session_response_item -> _redact_text(_enabled=...)
+    # plumbing already exists; this wires the caller so the sidebar list path gets the
+    # same read-once optimization redact_session_data() already uses. On a large list
+    # this was the multi-second response_write stage in /api/sessions diagnostics. (#4662 Phase 3)
+    # load_settings is imported at module scope (below); this function only runs at
+    # request time, well after module load, so no lazy import is needed.
+    try:
+        _redact_enabled = bool(load_settings().get("api_redact_enabled", True))
+    except Exception:
+        _redact_enabled = True  # fail safe: redact when settings are unreadable
     for s in runtime_rows:
-        item = _sidebar_session_response_item(s) if isinstance(s, dict) else {}
+        item = _sidebar_session_response_item(s, redact_enabled=_redact_enabled) if isinstance(s, dict) else {}
         safe_merged.append(item)
     response = {
         "sessions": safe_merged,
@@ -6635,11 +6688,16 @@ from api.workspace import (
     get_last_workspace,
     set_last_workspace,
     git_info_for_workspace,
+    authorize_escape_target,
+    EscapeAuthorizationExpiredError,
     list_dir,
+    list_authorized_escape_dir,
     dir_signature,
     list_workspace_suggestions,
     read_file_content,
+    read_authorized_escape_file_content,
     safe_resolve_ws,
+    raw_authorized_escape_target,
     resolve_trusted_workspace,
     open_anchored_fd,
     open_anchored_create_fd,
@@ -9794,9 +9852,12 @@ def handle_get(handler, parsed) -> bool:
             active_profile = get_active_profile_name()
             all_profiles = _all_profiles_enabled(parsed)
             include_archived = _query_flag(parsed, "include_archived")
+            exclude_hidden = _query_flag(parsed, "exclude_hidden")
             sidebar_source = parse_qs(parsed.query).get("sidebar_source", [""])[0].strip().lower() or None
             if sidebar_source not in ("webui", "cli"):
                 sidebar_source = None
+            # /api/sessions is the default sidebar contract, so keep the route-owned
+            # visible-row filter in the shared cache builder for both cache hits and misses.
             key = _session_list_cache_key(
                 active_profile=active_profile,
                 all_profiles=all_profiles,
@@ -9804,6 +9865,8 @@ def handle_get(handler, parsed) -> bool:
                 show_previous_messaging_sessions=show_previous_messaging_sessions,
                 show_cron_sessions=show_cron_sessions,
                 include_archived=include_archived,
+                exclude_hidden=exclude_hidden,
+                visible_only=True,
                 source_filter=agent_session_source_filter,
                 sidebar_source=sidebar_source,
             )
@@ -9820,6 +9883,8 @@ def handle_get(handler, parsed) -> bool:
                     show_previous_messaging_sessions=show_previous_messaging_sessions,
                     show_cron_sessions=show_cron_sessions,
                     include_archived=include_archived,
+                    exclude_hidden=exclude_hidden,
+                    visible_only=True,
                     source_filter=agent_session_source_filter,
                     sidebar_source=sidebar_source,
                     diag=diag,
@@ -9886,6 +9951,9 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/api/list":
         return _handle_list_dir(handler, parsed)
+
+    if parsed.path == "/api/escape/list":
+        return _handle_escape_list_dir(handler, parsed)
 
     if parsed.path == "/api/git/status":
         return _handle_git_status(handler, parsed)
@@ -10037,11 +10105,17 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/file/raw":
         return _handle_file_raw(handler, parsed)
 
+    if parsed.path == "/api/escape/file/raw":
+        return _handle_escape_file_raw(handler, parsed)
+
     if parsed.path == "/api/folder/download":
         return _handle_folder_download(handler, parsed)
 
     if parsed.path == "/api/file":
         return _handle_file_read(handler, parsed)
+
+    if parsed.path == "/api/escape/file/read":
+        return _handle_escape_file_read(handler, parsed)
 
     if parsed.path == "/api/approval/pending":
         return _handle_approval_pending(handler, parsed)
@@ -10544,6 +10618,9 @@ def handle_post(handler, parsed) -> bool:
         if diag:
             diag.finish()
         raise
+
+    if parsed.path == "/api/escape/authorize":
+        return _handle_escape_authorize(handler, parsed, body)
 
     if parsed.path == "/api/updates/check":
         settings = load_settings()
@@ -12980,6 +13057,137 @@ def _handle_list_dir(handler, parsed):
         )
     except (FileNotFoundError, ValueError) as e:
         return bad(handler, _sanitize_error(e), 404)
+
+
+def _read_json_request_body(handler, *, max_bytes: int = 4096) -> dict:
+    try:
+        length = _safe_content_length(handler, max_bytes)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError(_sanitize_error(exc)) from exc
+    raw = handler.rfile.read(length) if length else b"{}"
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("invalid JSON body") from exc
+    return payload if isinstance(payload, dict) else {}
+
+
+def _handle_escape_authorize(handler, parsed, body: dict | None = None):
+    if handler.command != "POST":
+        return bad(handler, "method not allowed", 405)
+    if not handler.headers.get("Origin"):
+        return bad(handler, "browser origin required", 403)
+    if not _check_csrf(handler):
+        return bad(handler, _csrf_rejection_error(handler), 403)
+    if body is None:
+        try:
+            body = _read_json_request_body(handler)
+        except ValueError as exc:
+            return bad(handler, _sanitize_error(exc), 400)
+    qs = parse_qs(parsed.query)
+    sid = str(body.get("session_id") or qs.get("session_id", [""])[0] or "").strip()
+    rel = str(body.get("path") or qs.get("path", [""])[0] or "").strip()
+    token = str(body.get("token") or qs.get("token", [""])[0] or "").strip()
+    if token:
+        return bad(handler, "token must not be provided", 400)
+    if not sid:
+        return bad(handler, "session_id is required")
+    if not rel:
+        return bad(handler, "path is required")
+    try:
+        s = get_session_for_file_ops(sid)
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    try:
+        payload = authorize_escape_target(Path(s.workspace), sid, rel)
+    except ValueError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+    return j(handler, payload)
+
+
+def _handle_escape_list_dir(handler, parsed):
+    qs = parse_qs(parsed.query)
+    sid = qs.get("session_id", [""])[0]
+    token = qs.get("token", [""])[0]
+    if not sid:
+        return bad(handler, "session_id is required")
+    if not token:
+        return bad(handler, "token is required")
+    try:
+        s = get_session_for_file_ops(sid)
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    rel_path = qs.get("path", ["."])[0]
+    try:
+        payload = list_authorized_escape_dir(Path(s.workspace), sid, token, rel_path)
+        return j(handler, payload)
+    except FileNotFoundError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+    except EscapeAuthorizationExpiredError as exc:
+        return bad(handler, _sanitize_error(exc), 403)
+    except ValueError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+
+
+def _handle_escape_file_read(handler, parsed):
+    qs = parse_qs(parsed.query)
+    sid = qs.get("session_id", [""])[0]
+    token = qs.get("token", [""])[0]
+    if not sid:
+        return bad(handler, "session_id is required")
+    if not token:
+        return bad(handler, "token is required")
+    try:
+        s = get_session_for_file_ops(sid)
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    rel = qs.get("path", [""])[0]
+    try:
+        return j(handler, read_authorized_escape_file_content(Path(s.workspace), sid, token, rel))
+    except FileNotFoundError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+    except EscapeAuthorizationExpiredError as exc:
+        return bad(handler, _sanitize_error(exc), 403)
+    except ValueError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+
+
+def _handle_escape_file_raw(handler, parsed):
+    qs = parse_qs(parsed.query)
+    sid = qs.get("session_id", [""])[0]
+    token = qs.get("token", [""])[0]
+    if not sid:
+        return bad(handler, "session_id is required")
+    if not token:
+        return bad(handler, "token is required")
+    try:
+        s = get_session_for_file_ops(sid)
+    except KeyError:
+        return bad(handler, "Session not found", 404)
+    rel = qs.get("path", [""])[0]
+    force_download = qs.get("download", [""])[0] == "1"
+    try:
+        anchor_root, target = raw_authorized_escape_target(Path(s.workspace), sid, token, rel)
+    except FileNotFoundError:
+        return j(handler, {"error": "not found"}, status=404)
+    except EscapeAuthorizationExpiredError as exc:
+        return bad(handler, _sanitize_error(exc), 403)
+    except ValueError as exc:
+        return bad(handler, _sanitize_error(exc), 404)
+    if not target.exists() or not target.is_file():
+        return j(handler, {"error": "not found"}, status=404)
+    ext = target.suffix.lower()
+    mime = MIME_MAP.get(ext, "application/octet-stream")
+    inline_preview = qs.get("inline", [""])[0] == "1"
+    dangerous_types = {"text/html", "application/xhtml+xml", "image/svg+xml"}
+    html_inline_ok = inline_preview and mime == "text/html"
+    disposition = "attachment" if force_download or (mime in dangerous_types and not html_inline_ok) else "inline"
+    sandbox_csp = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+    # Content-Security-Policy sandboxing is carried through the csp=sandbox_csp handoff below.
+    csp = sandbox_csp if (inline_preview and not force_download and disposition == "inline") else None
+    if html_inline_ok:
+        return _serve_inline_html_preview(handler, target, "no-store", csp=sandbox_csp, anchor_root=anchor_root)
+    return _serve_file_bytes(handler, target, mime, disposition, "no-store", csp=csp, anchor_root=anchor_root)
 
 
 def _sse_with_id(handler, event, data, event_id=None):

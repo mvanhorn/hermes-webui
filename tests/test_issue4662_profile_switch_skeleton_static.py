@@ -139,7 +139,12 @@ class TestSessionsWiring:
         render_idx = SESSIONS.index("function renderSessionListFromCache(")
         render_body = SESSIONS[render_idx: render_idx + 1200]
         apply_idx = SESSIONS.index("function _applySessionListPayload(")
-        apply_body = SESSIONS[apply_idx: apply_idx + 4000]
+        # Slice to the END of _applySessionListPayload()'s body (the next top-level
+        # function), not a fixed char window — #4748 added lines inside this function
+        # that pushed `_sessionListSkeletonActive = false;` past a fixed 4000-char
+        # window. Anchoring on the next function def keeps the assertion robust.
+        apply_end = SESSIONS.index("function _mergeRenderSessionListOptions(", apply_idx)
+        apply_body = SESSIONS[apply_idx: apply_end]
 
         assert "if(_sessionListSkeletonActive)return;" in render_body.replace(" ", "")
         assert "_sessionListSkeletonActive = false;" in apply_body

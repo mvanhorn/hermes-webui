@@ -1,6 +1,13 @@
 import pytest
 
-from api.workspace import list_dir, read_file_content, safe_resolve_ws
+from api.workspace import (
+    authorize_escape_target,
+    list_authorized_escape_dir,
+    list_dir,
+    read_file_content,
+    resolve_authorized_escape_request,
+    safe_resolve_ws,
+)
 
 
 def test_safe_resolve_blocks_external_symlink_directory(tmp_path):
@@ -67,6 +74,98 @@ def test_internal_symlink_still_resolves_within_workspace(tmp_path):
     if not w._DIR_FD_OK:
         pytest.skip("internal symlink listing is platform-dependent without dir_fd")
     assert "inside-link.txt" in {entry["name"] for entry in list_dir(workspace, ".")}
+
+
+def test_authorized_escape_request_reanchors_descendants(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    (outside / "nested").mkdir(parents=True)
+    (outside / "nested" / "inside.txt").write_text("inside", encoding="utf-8")
+    (workspace / "escape").symlink_to(outside)
+
+    grant = authorize_escape_target(workspace, "sess-1", "escape")
+    resolved = resolve_authorized_escape_request(
+        workspace,
+        "sess-1",
+        grant["token"],
+        "escape/nested/inside.txt",
+    )
+
+    assert resolved["surface_path"] == "escape"
+    assert resolved["external_rel"] == "nested/inside.txt"
+    assert resolved["target"] == outside / "nested" / "inside.txt"
+
+
+def test_authorized_escape_request_expires_when_surface_target_changes(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside_a = tmp_path / "outside-a"
+    outside_b = tmp_path / "outside-b"
+    workspace.mkdir()
+    outside_a.mkdir()
+    outside_b.mkdir()
+    escape = workspace / "escape"
+    escape.symlink_to(outside_a)
+
+    grant = authorize_escape_target(workspace, "sess-1", "escape")
+
+    escape.unlink()
+    escape.symlink_to(outside_b)
+
+    with pytest.raises(ValueError, match="expired"):
+        resolve_authorized_escape_request(workspace, "sess-1", grant["token"], "escape")
+
+
+def test_authorized_escape_request_keeps_other_live_grants(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside_a = tmp_path / "outside-a"
+    outside_b = tmp_path / "outside-b"
+    workspace.mkdir()
+    outside_a.mkdir()
+    outside_b.mkdir()
+    (outside_a / "alpha.txt").write_text("alpha", encoding="utf-8")
+    (outside_b / "beta.txt").write_text("beta", encoding="utf-8")
+    (workspace / "escape-a").symlink_to(outside_a)
+    (workspace / "escape-b").symlink_to(outside_b)
+
+    grant_a = authorize_escape_target(workspace, "sess-1", "escape-a")
+    grant_b = authorize_escape_target(workspace, "sess-1", "escape-b")
+
+    resolved_a = resolve_authorized_escape_request(
+        workspace,
+        "sess-1",
+        grant_a["token"],
+        "escape-a/alpha.txt",
+    )
+    resolved_b = resolve_authorized_escape_request(
+        workspace,
+        "sess-1",
+        grant_b["token"],
+        "escape-b/beta.txt",
+    )
+
+    assert resolved_a["target"] == outside_a / "alpha.txt"
+    assert resolved_b["target"] == outside_b / "beta.txt"
+
+
+def test_authorized_listing_keeps_nested_child_escape_display_only(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    second_outside = tmp_path / "second-outside"
+    workspace.mkdir()
+    outside.mkdir()
+    second_outside.mkdir()
+    (workspace / "escape").symlink_to(outside)
+    (outside / "nested-escape").symlink_to(second_outside)
+
+    grant = authorize_escape_target(workspace, "sess-1", "escape")
+    payload = list_authorized_escape_dir(workspace, "sess-1", grant["token"], "escape")
+    entries = {entry["name"]: entry for entry in payload["entries"]}
+
+    assert entries["nested-escape"]["path"] == "escape/nested-escape"
+    assert entries["nested-escape"]["target_outside_workspace"] is True
+    assert entries["nested-escape"]["escape_read_only"] is True
+    assert "target" not in entries["nested-escape"]
 
 
 # ── TOCTOU hardening (#3398): a path that passes safe_resolve_ws() but is then

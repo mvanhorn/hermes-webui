@@ -250,24 +250,33 @@ def test_frontend_sends_sidebar_source_param():
 def test_session_list_query_string_respects_sidebar_source_and_flags():
     src = SESSIONS_JS.read_text(encoding="utf-8")
     requested_source_fn = _extract_function(src, "_requestedSessionSidebarSource")
+    exclude_hidden_fn = _extract_function(src, "_sessionListExcludeHiddenEnabled")
     query_fn = _extract_function(src, "_sessionListQueryString")
     script = f"""
 global.window = {{ _showCliSessions: true }};
+global._activeProject = null;
 global._sessionSourceFilter = 'cli';
 global._showAllProfiles = true;
 global._showArchived = false;
 {requested_source_fn}
+{exclude_hidden_fn}
 {query_fn}
 const first = _sessionListQueryString();
 window._showCliSessions = false;
 global._showArchived = true;
 const second = _sessionListQueryString();
-console.log(JSON.stringify({{ first, second }}));
+global._activeProject = '__none__';
+global.NO_PROJECT_FILTER = '__none__';
+global._showAllProfiles = false;
+global._showArchived = false;
+const third = _sessionListQueryString();
+console.log(JSON.stringify({{ first, second, third }}));
 """
     body = _run_node(script)
 
-    assert body["first"] == "?sidebar_source=cli&all_profiles=1"
-    assert body["second"] == "?sidebar_source=webui&all_profiles=1&include_archived=1"
+    assert body["first"] == "?sidebar_source=cli&exclude_hidden=1&all_profiles=1"
+    assert body["second"] == "?sidebar_source=webui&exclude_hidden=1&all_profiles=1&include_archived=1"
+    assert body["third"] == "?sidebar_source=webui&exclude_hidden=1"
 
 
 @pytest.mark.skipif(NODE is None, reason="node not on PATH")
@@ -318,6 +327,7 @@ console.log(JSON.stringify({{
 def test_apply_payload_and_tab_count_helpers_cover_old_and_new_payloads():
     src = SESSIONS_JS.read_text(encoding="utf-8")
     requested_source_fn = _extract_function(src, "_requestedSessionSidebarSource")
+    exclude_hidden_fn = _extract_function(src, "_sessionListExcludeHiddenEnabled")
     apply_fn = _extract_function(src, "_applySessionListPayload")
     count_fn = _extract_function(src, "_sessionSourceTabCount")
     clear_fn = _extract_function(src, "_clearSessionSourceTabCounts")
@@ -338,6 +348,8 @@ global._sessionListLoadError = null;
 global._sessionListHasLoadedOnce = false;
 global._sessionListFirstRenderAnimated = true;
 global._sessionListSkeletonActive = true;
+global._activeProject = null;
+global.NO_PROJECT_FILTER = '__none__';
 global._showAllProfiles = false;
 global._sessionSourceFilter = 'webui';
 global.S = {{ activeProfile: 'default' }};
@@ -346,18 +358,20 @@ global._mergeOptimisticFirstTurnSessions = rows => rows;
 global._syncSessionAttentionSoundState = () => {{}};
 global._pruneLineageReportCacheToVisibleSessions = () => {{}};
 global._markPollingCompletionUnreadTransitions = () => {{}};
+global._recordSessionProfileCount = () => {{}};
 global._isSessionEffectivelyStreaming = () => false;
 global.startStreamingPoll = () => {{}};
 global.stopStreamingPoll = () => {{}};
 global.ensureSessionTimeRefreshPoll = () => {{}};
 global.ensureActiveSessionExternalRefreshPoll = () => {{}};
-global.ensureSessionEventsSSE = () => {{}};
-global.animateNextSessionListRefresh = () => {{}};
-global.renderSessionListFromCache = () => {{}};
-{clear_fn}
-{count_fn}
-{requested_source_fn}
-{apply_fn}
+    global.ensureSessionEventsSSE = () => {{}};
+    global.animateNextSessionListRefresh = () => {{}};
+    global.renderSessionListFromCache = () => {{}};
+    {clear_fn}
+    {count_fn}
+    {requested_source_fn}
+    {exclude_hidden_fn}
+    {apply_fn}
 const sessions = [{{ session_id: 'webui-1' }}];
 _applySessionListPayload({{ sessions, other_profile_count: 0, archived_count: 0, active_profile: 'default' }}, {{ projects: [] }});
 const oldPayload = {{
@@ -486,7 +500,7 @@ console.log(JSON.stringify({{
 
 def test_session_list_response_omits_bucket_counts_when_missing(monkeypatch):
     monkeypatch.setattr(routes, "_session_list_cache_overlay_runtime_rows", lambda rows: rows)
-    monkeypatch.setattr(routes, "_sidebar_session_response_item", lambda row: row)
+    monkeypatch.setattr(routes, "_sidebar_session_response_item", lambda row, *, redact_enabled=None: row)
 
     body = routes._session_list_payload_to_response(
         {
@@ -513,6 +527,7 @@ def test_scope_mismatch_error_path_respects_sidebar_source():
     purge_fn = _extract_function(src, "_purgeStaleInflightEntries")
     clear_fn = _extract_function(src, "_clearSessionSourceTabCounts")
     requested_source_fn = _extract_function(src, "_requestedSessionSidebarSource")
+    exclude_hidden_fn = _extract_function(src, "_sessionListExcludeHiddenEnabled")
     query_fn = _extract_function(src, "_sessionListQueryString")
     refresh_fn = _extract_function(src, "_runRenderSessionListRefresh").replace(
         "function _runRenderSessionListRefresh",
@@ -530,6 +545,8 @@ global._profileSwitchListEmbargo = false;
 global._pendingSessionListPayload = null;
 global._allProjects = [];
 global._contentSearchResults = ['stale'];
+global._activeProject = null;
+global.NO_PROJECT_FILTER = '__none__';
 global.S = {{ activeProfile: 'default' }};
 global.$ = () => ({{ value: '' }});
 global._isSessionListUserInteracting = () => false;
@@ -551,12 +568,13 @@ global.renderSessionListFromCache = () => {{
   }});
 }};
 global.api = () => Promise.reject(new Error('boom'));
-global.clearInflightState = sid => cleared.push(sid);
-{purge_fn}
-{clear_fn}
-{requested_source_fn}
-{query_fn}
-{refresh_fn}
+    global.clearInflightState = sid => cleared.push(sid);
+    {purge_fn}
+    {clear_fn}
+    {requested_source_fn}
+    {exclude_hidden_fn}
+    {query_fn}
+    {refresh_fn}
 async function runCase(requestedSource, cachedSource) {{
   global._sessionSourceFilter = requestedSource;
   global._allSessions = [{{ session_id: cachedSource + '-1' }}];
@@ -564,6 +582,7 @@ async function runCase(requestedSource, cachedSource) {{
     profile: 'default',
     allProfiles: false,
     sidebarSource: cachedSource,
+    excludeHidden: true,
   }};
   global._sessionListSourceById = new Map([['webui-live', 'webui']]);
   global.INFLIGHT = {{ 'webui-live': {{ lastAssistantText: 'working' }} }};
@@ -602,6 +621,7 @@ async function runCase(requestedSource, cachedSource) {{
         "profile": "default",
         "allProfiles": False,
         "sidebarSource": "cli",
+        "excludeHidden": True,
     }
     assert body["mismatch"]["webui"] is None
     assert body["mismatch"]["cli"] is None
@@ -615,6 +635,7 @@ async function runCase(requestedSource, cachedSource) {{
         "profile": "default",
         "allProfiles": False,
         "sidebarSource": "webui",
+        "excludeHidden": True,
     }
     assert body["match"]["webui"] == 11
     assert body["match"]["cli"] == 5

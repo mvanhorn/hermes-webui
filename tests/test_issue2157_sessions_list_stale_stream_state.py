@@ -48,6 +48,7 @@ def test_sessions_list_reconciles_stale_stream_state_before_serializing(monkeypa
                 "session_id": "stale-session",
                 "title": "Stale Session",
                 "profile": "default",
+                "message_count": 1,
                 "active_stream_id": active_stream_id,
                 "is_streaming": is_streaming,
                 "updated_at": 1,

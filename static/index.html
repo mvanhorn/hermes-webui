@@ -851,6 +851,7 @@
         </div>
         <div class="main-view-actions">
           <button class="panel-head-btn has-tooltip has-tooltip--bottom" id="btnKanbanCreateBoard" onclick="openKanbanCreateBoard()" data-tooltip="New board" data-i18n-title="kanban_new_board" aria-label="New board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="17.5" y1="14" x2="17.5" y2="21"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg></button>
+          <button class="panel-head-btn kanban-view-toggle has-tooltip has-tooltip--bottom" id="btnKanbanViewToggle" type="button" onclick="toggleKanbanViewMode()" aria-pressed="false" data-tooltip="Consolidated view" data-i18n-title="kanban_view_consolidated" data-i18n-aria-label="kanban_view_consolidated" aria-label="Consolidated view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16"/><path d="M16 4v16"/><path d="M3 10h18"/></svg></button>
           <button class="panel-head-btn has-tooltip has-tooltip--bottom kanban-nudge-dispatch-btn" id="btnKanbanPreviewDispatcher" onclick="nudgeKanbanDispatcher()" data-tooltip="Preview dispatcher (dry-run)" data-i18n-title="kanban_nudge_dispatcher" aria-label="Preview dispatcher (dry-run)">▶</button>
           <button class="panel-head-btn has-tooltip has-tooltip--bottom kanban-run-dispatch-btn" id="btnKanbanRunDispatcher" onclick="runKanbanDispatcher()" data-tooltip="Run dispatcher — claim Ready tasks" data-i18n-title="kanban_run_dispatcher" aria-label="Run dispatcher"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></button>
         </div>
@@ -1070,6 +1071,19 @@
                 <span data-i18n="settings_label_render_user_markdown">Render markdown in user messages</span>
               </label>
               <div style="font-size:11px;color:var(--muted);margin-top:4px" data-i18n="settings_desc_render_user_markdown">When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.</div>
+            </div>
+            <div class="settings-field" style="margin-top:8px">
+              <label for="settingsStructuredCodeMode" data-i18n="settings_label_structured_code">JSON/YAML code blocks</label>
+              <select id="settingsStructuredCodeMode" style="width:100%;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px">
+                <option value="auto" data-i18n="settings_option_structured_code_auto">Auto: Tree for long blocks</option>
+                <option value="on" data-i18n="settings_option_structured_code_on">Tree by default</option>
+                <option value="off" data-i18n="settings_option_structured_code_off">Raw by default</option>
+              </select>
+              <div style="margin-top:8px">
+                <label for="settingsStructuredCodeAutoLines" data-i18n="settings_label_structured_code_auto_lines">Auto threshold lines</label>
+                <input type="number" id="settingsStructuredCodeAutoLines" min="1" max="1000" step="1" inputmode="numeric" style="width:100%;padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:13px">
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:4px" data-i18n="settings_desc_structured_code">When Auto is selected, JSON/YAML blocks with at least this many lines open in Tree view. Tree always opens the structured viewer; Raw keeps the syntax-highlighted text. You can still switch Tree/Raw on each block.</div>
             </div>
             <div class="settings-field" style="margin-top:8px">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">

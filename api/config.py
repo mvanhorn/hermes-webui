@@ -485,34 +485,49 @@ def reload_config() -> None:
         _cfg_path = config_path
         _cfg_mtime = 0.0
         try:
-            import yaml as _yaml
-
             if config_path.exists():
-                loaded = _yaml.safe_load(config_path.read_text(encoding="utf-8"))
+                # Route the parse through the mtime-keyed cache (#4652) so an
+                # unchanged config.yaml isn't re-parsed (~125ms+ on a large file)
+                # on every reload_config() on the hot path (profile switch /
+                # load_settings, #4662 Phase 2). We take the RAW cached dict and
+                # run the env expansion HERE, pinned to the unscoped process-env
+                # view (below) — never the helper's per-call expansion — for the
+                # #798 TLS reason documented in the pin block.
+                loaded = _load_yaml_config_file_raw(config_path)
                 if isinstance(loaded, dict):
-                    # The process-global _cfg_cache must reflect PROCESS-env
-                    # expansion, never a profile-scoped block_process_env_fallback
-                    # view — otherwise a reload that fires while a readonly/worker
-                    # scope is active (profile alternation resolves _get_config_path
-                    # to the named profile, #798 TLS) would bake under-expanded
-                    # literal ${VAR}s into the shared cache and starve concurrent
-                    # readers of the module-level `cfg` alias. Expansion re-runs
-                    # per-read elsewhere; here we pin the cache to the unscoped view.
-                    _prev_block = getattr(_thread_ctx, "block_process_env_fallback", False)
-                    _prev_env = getattr(_thread_ctx, "env", None)
-                    try:
-                        _thread_ctx.block_process_env_fallback = False
-                        _thread_ctx.env = {}
-                        _cfg_cache.update(_expand_env_vars(loaded))
-                    finally:
-                        _thread_ctx.block_process_env_fallback = _prev_block
-                        if _prev_env is None:
-                            try:
-                                del _thread_ctx.env
-                            except AttributeError:
-                                pass
-                        else:
-                            _thread_ctx.env = _prev_env
+                    if loaded:
+                        # The process-global _cfg_cache must reflect PROCESS-env
+                        # expansion, never a profile-scoped block_process_env_fallback
+                        # view — otherwise a reload that fires while a readonly/worker
+                        # scope is active (profile alternation resolves _get_config_path
+                        # to the named profile, #798 TLS) would bake under-expanded
+                        # literal ${VAR}s into the shared cache and starve concurrent
+                        # readers of the module-level `cfg` alias. Expansion re-runs
+                        # per-read elsewhere; here we pin the cache to the unscoped view.
+                        _prev_block = getattr(_thread_ctx, "block_process_env_fallback", False)
+                        _prev_env = getattr(_thread_ctx, "env", None)
+                        try:
+                            _thread_ctx.block_process_env_fallback = False
+                            _thread_ctx.env = {}
+                            _cfg_cache.update(_expand_env_vars(loaded))
+                        finally:
+                            _thread_ctx.block_process_env_fallback = _prev_block
+                            if _prev_env is None:
+                                try:
+                                    del _thread_ctx.env
+                                except AttributeError:
+                                    pass
+                            else:
+                                _thread_ctx.env = _prev_env
+                    # Stamp _cfg_mtime whenever the file parsed to a dict — INCLUDING
+                    # an empty {} config. The cache-update above is skipped for {} (it's
+                    # a no-op), but _cfg_mtime MUST still be set or get_config()'s
+                    # `current_mtime != _cfg_mtime` stale check fires on every call and
+                    # spins reload_config() under _cfg_lock forever (a `{}` config from a
+                    # freshly created/reset profile is reachable on the switch hot path).
+                    # This matches master's pre-#4662 behavior (it entered the block for
+                    # {} and set the mtime); the inner `if loaded:` only gates the no-op
+                    # cache update, not the mtime stamp.
                     try:
                         _cfg_mtime = Path(config_path).stat().st_mtime
                     except OSError:
@@ -544,7 +559,22 @@ _yaml_file_cache: dict[str, tuple] = {}
 _yaml_file_cache_lock = threading.Lock()
 
 
-def _load_yaml_config_file(config_path: Path) -> dict:
+def _load_yaml_config_file_raw(config_path: Path, *, _copy: bool = True) -> dict:
+    """Return the RAW (un-env-expanded) parsed config dict, memoized on
+    (resolved path, st_mtime_ns, st_size). Shared parse core for
+    _load_yaml_config_file() and reload_config(): the former runs the helper's
+    own per-call env expansion on the result; the latter must run expansion
+    under its own process-env-pinned thread context (#798), so it takes the raw
+    dict and expands it itself. Either way the file is parsed at most once per
+    (mtime, size) — a UI sync storm can't turn into a YAML-reparse storm (#4650),
+    and an unchanged config.yaml isn't reparsed on the profile-switch hot path
+    (#4662 Phase 2).
+
+    By default returns a deep copy so a caller can never mutate the shared cache
+    entry (greptile #4741). Internal callers that immediately pass the result
+    through _expand_env_vars() (which itself returns a fresh structure and never
+    mutates its input) pass _copy=False to skip the redundant copy on the hot path.
+    """
     try:
         import yaml as _yaml
     except ImportError:
@@ -561,8 +591,10 @@ def _load_yaml_config_file(config_path: Path) -> dict:
     with _yaml_file_cache_lock:
         cached = _yaml_file_cache.get(cache_key)
         if cached is not None and cached[0] == stat_key:
-            expanded = _expand_env_vars(cached[1])
-            return expanded if isinstance(expanded, dict) else {}
+            raw = cached[1]
+            if not isinstance(raw, dict):
+                return {}
+            return copy.deepcopy(raw) if _copy else raw
 
     # Cache miss / stale: parse off disk. Done outside the lock so a slow parse
     # doesn't serialize unrelated paths; a concurrent duplicate parse is harmless.
@@ -575,6 +607,14 @@ def _load_yaml_config_file(config_path: Path) -> dict:
     raw = loaded if isinstance(loaded, dict) else {}
     with _yaml_file_cache_lock:
         _yaml_file_cache[cache_key] = (stat_key, raw)
+    return copy.deepcopy(raw) if _copy else raw
+
+
+def _load_yaml_config_file(config_path: Path) -> dict:
+    # _copy=False: _expand_env_vars returns a fresh structure and never mutates
+    # its input, so the env-expanded result is already cache-safe — no need to
+    # deep-copy the raw dict first (keeps the /api/reasoning hot path cheap).
+    raw = _load_yaml_config_file_raw(config_path, _copy=False)
     if not raw:
         return {}
     expanded = _expand_env_vars(raw)
@@ -7303,6 +7343,8 @@ _SETTINGS_DEFAULTS = {
     "font_size": "default",  # small | default | large | xlarge
     "session_jump_buttons": False,  # show Start/End transcript jump pills
     "render_user_markdown": False,  # opt-in: render full markdown in user messages (#3870)
+    "structured_code_default_view": "auto",  # JSON/YAML fenced-block default render: auto | on | off (#484 follow-up). auto => Tree when line count >= structured_code_auto_tree_lines, else Raw.
+    "structured_code_auto_tree_lines": 10,  # in 'auto' mode, minimum line count to default a JSON/YAML block to Tree view (preserves the original hardcoded >=10 behavior)
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
     "chat_activity_display_mode": "compact_worklog",  # compact_worklog | transparent_stream
     "auto_scroll_follow": True,  # follow new output to the bottom while streaming (Codex/Claude-Code-style sticky bottom); the user scrolling up unpins and is respected
@@ -7511,6 +7553,7 @@ _SETTINGS_ENUM_VALUES = {
     "auto_title_refresh_every": {"0", "5", "10", "20"},
     "busy_input_mode": {"queue", "interrupt", "steer"},
     "chat_activity_display_mode": {"compact_worklog", "transparent_stream"},
+    "structured_code_default_view": {"auto", "on", "off"},
 }
 _SETTINGS_INT_RANGES = {
     "pinned_sessions_limit": (1, 99),
@@ -7519,6 +7562,7 @@ _SETTINGS_INT_RANGES = {
     "inflight_state_max_tool_calls": (1, 200),
     "inflight_state_max_string_chars": (1000, 500000),
     "inflight_state_max_json_chars": (100000, 4000000),
+    "structured_code_auto_tree_lines": (1, 1000),
 }
 _SETTINGS_BOOL_KEYS = {
     "onboarding_completed",

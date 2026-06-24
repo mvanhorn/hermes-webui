@@ -3,6 +3,75 @@
 
 ## [Unreleased]
 
+## [v0.51.614] — 2026-06-23 — Release VU (Kanban consolidated view toggle)
+
+### Added
+
+- **The Kanban board can now switch between a per-profile lane view and a consolidated view.** A new toggle in the board header flips between "Lanes by profile" (tasks grouped into a horizontal lane per assignee — the existing default) and "Consolidated view" (a single set of columns with every assignee's tasks merged). The choice is saved per board (`lane_by_profile`), and the default stays lanes-by-profile so existing boards are unchanged unless you opt in. The consolidated view only regroups the tasks already returned for the board — it applies no new visibility and exposes nothing that the lane view didn't. Thanks @stefan-wisbric. (#2814)
+
+## [v0.51.613] — 2026-06-23 — Release VT (eliminate O(DOM) streaming render freeze on long answers)
+
+### Fixed
+
+- **Long agent answers no longer progressively freeze the UI while streaming.** On answers of 30,000+ characters (5,000+ DOM nodes), every streamed token ran a full-DOM link-sanitization scan, so render cost grew with the answer size and the tab eventually froze (and could crash the renderer). Link URL-scheme validation now happens inline as each DOM node is created (via a wrapped streaming-markdown renderer), eliminating the per-token full-DOM rescan, and the streaming render now caches its parse result to skip redundant re-parsing. Dangerous URL schemes (`javascript:`, `data:`, `vbscript:`, etc.) are still rejected on links and images exactly as before, and the final settled render still runs the full sanitizer. Thanks @wlknight. (#4800)
+
+## [v0.51.612] — 2026-06-23 — Release VS (background-tab notifications + profile default workspace on fresh sessions)
+
+### Fixed
+
+- **Background (visible-but-unfocused) desktop-app tabs now fire OS notifications without closing their live stream.** The browser-notification gate previously used only `document.hidden` as the background signal, so a desktop-host tab that was visible but unfocused either missed notifications or, if it spoofed hidden state, tore down its SSE stream. A desktop-owned notification-only background flag now drives the notification gate; all `document.hidden`-based stream/visibility logic is unchanged. Thanks @rodboev. (#4753)
+- **New sessions now land on the profile's default workspace instead of inheriting the current session's workspace.** Fresh-session workspace precedence is corrected to one-shot override → profile default → current-session fallback, so a configured profile default wins on New Chat (when no default is set, behavior is unchanged). The blank-page workspace-creation path and the busy-session rule are preserved. Thanks @rodboev. (#4755)
+
+## [v0.51.611] — 2026-06-23 — Release VR (configurable JSON/YAML code-block default view)
+
+### Added
+
+- **The default view for JSON/YAML code blocks (Tree vs Raw) is now configurable in Settings → Appearance.** A new "JSON/YAML code blocks" control offers `Auto` (Tree only when a block has at least N lines), `On` (always Tree), or `Off` (always Raw), plus an "Auto threshold lines" input (1–1000, default 10). The previous hardcoded behavior (Tree at ≥10 lines) is exactly reproduced by the `Auto` + `10` default, so nothing changes for existing users unless they opt in. The per-block Tree/Raw toggle still works regardless of the default. Useful when short JSON/YAML snippets over the old 10-line cutoff would balloon into a tall tree and push the conversation off-screen. Thanks @metaember. (#484)
+
+## [v0.51.610] — 2026-06-23 — Release VQ (read-only access to escape-target symlinks in the workspace tree)
+
+### Added
+
+- **The workspace file tree can now surface read-only file content under an authorized escape-target symlink.** When the workspace contains a symlink pointing outside the workspace root, you can explicitly confirm a dialog to browse and read (never write) files under that target. The access is tightly bounded: it is opt-in per symlink, grants a server-minted token scoped to `(session, workspace root, surface path)` with a 300s TTL, refuses system roots (a symlink to `/etc` can never be authorized), re-verifies the symlink on every request (a target swap after authorization is rejected), contains second-hop escapes (no `../` or nested-symlink climb-out beyond the authorized target), and never exposes any write/rename/delete path. The ordinary workspace file API still blocks all escape paths; this content is reachable only through the explicit authorized routes. (#4582)
+
+## [v0.51.609] — 2026-06-23 — Release VP (collapse the live Compact Worklog mid-stream)
+
+### Changed
+
+- **Live Compact Worklog summaries can now be expanded or collapsed while a response is still streaming.** The `Processed …` row keeps its timer and now behaves like the settled Worklog disclosure, so users can hide noisy live work details without waiting for the final answer. Thanks @franksong2702. (#4781)
+
+## [v0.51.608] — 2026-06-23 — Release VO (recycle DOM nodes during virtual-scroll re-renders)
+
+### Changed
+
+- **Long transcripts recycle DOM nodes during virtual-scroll re-renders instead of rebuilding the whole list.** While scrolling a long conversation, the virtualized message list now reuses existing row/turn DOM nodes (keyed on a dedicated `data-recycle-key`, type-guarded so a user row is never reused as an assistant turn and vice-versa) rather than tearing down and recreating the window on every re-render. Recycled nodes are fully reset before refill and the recycle pool is render-local (bounded, never leaks across sessions). Also hardens scrollbar-drag handling so the `_programmaticScroll` suppression flag is always cleared (including the small-delta measurement early-return), so a real user scroll right after a drag is never ignored. Measurably reduces re-render cost and scroll jank on large transcripts. Thanks @rodboev. (#4346)
+
+## [v0.51.607] — 2026-06-23 — Release VN (empty-profile loading skeleton)
+
+### Changed
+
+- **Switching into a brand-new / empty profile no longer flashes a misleading "loading conversations" skeleton.** The profile-switch loading skeleton (#4671) always rendered a fixed content shape (group labels + rows); for a profile with zero conversations that implied data which never arrived, then resolved to an empty list — a small "where did my conversations go?" beat. The WebUI now records each profile's last-seen conversation count and, when switching into a profile it already knows has none, shows a quiet empty-state placeholder instead of the content skeleton (an unknown profile still gets the normal skeleton, so a profile that may have conversations is never under-shown). The empty placeholder respects `prefers-reduced-motion` and adapts to light/dark themes. Skipped while a project/source filter is active (the per-profile count is an unfiltered total). Phase 1.5 of the profile-switch UX work. (#4717)
+
+## [v0.51.606] — 2026-06-23 — Release VM (backend hot-path caching: config reparse + sidebar redaction read-once)
+
+### Changed
+
+- **Faster profile switching: the backend stops re-reading config and settings on the hot path.** Two behavior-preserving caching wins on the `/api/sessions` path that a profile switch hits cold (#4662, phase 2+3). (1) `reload_config()` no longer re-parses `config.yaml` from disk when the file is unchanged — it now routes through the same mtime-keyed parse cache used elsewhere, removing a ~hundreds-of-ms YAML reparse from each switch while preserving the exact process-env-expansion semantics that keep per-client profile isolation correct. (2) The sidebar session-list response now reads the redaction setting once per response instead of once per conversation row, eliminating a per-row `settings.json` read that grew into a multi-second serialization stage on large session lists. No user-visible behavior change — redaction still applies exactly as before; switching is just quicker. Part of the phased profile-switch performance work. Malformed `config.yaml` is now treated as empty-config-plus-defaults (mtime-stamped, no reload spin) rather than raising on every call. (#4662)
+
+## [v0.51.605] — 2026-06-23 — Release VL (trim hidden/empty rows from the sidebar payload)
+
+### Changed
+
+- **The `/api/sessions` sidebar payload no longer ships rows the browser drops locally.** Building on the source-tab pushdown (#4769), the default sidebar path was still serializing rescued `default_hidden` rows and plain 0-message rows that carry no visible-sidebar signal, only for the browser to discard them. These are now trimmed server-side before serialization, while messageful rows, rows with attention/unread/running state, active-stream rows, and the named-project-chip rescue (#3019) are all preserved request-shaped. Reduces payload size and serialization cost on the profile-switch hot path. Thanks @rodboev. (#4775)
+
+## [v0.51.604] — 2026-06-23 — Release VK (live-stream worklog scroll + dedup + mobile session-switch scroll)
+
+### Fixed
+
+- **Compact Worklog no longer snaps back to the user prompt during live-stream rebuilds.** Follow-up to the mid-stream scroll restore: the live Anchor scene now holds the transcript's scroll height stable while it removes and rebuilds Worklog rows, so the browser cannot temporarily clamp an unpinned reader's `scrollTop` to the top before the replacement rows land. Pinned-at-bottom streaming still follows the latest output. Thanks @franksong2702. (#4778)
+- **Compact Worklog no longer shows duplicate live process prose while a response is still streaming.** When the same progress sentence arrives through both interim assistant text and Anchor activity rows, the live scene now keeps one visible Process row, removes matching live reasoning echoes from the Worklog DOM, and hides legacy source assistant segments so they cannot appear as duplicate transcript prose. Thanks @franksong2702. (#4777)
+- **Switching conversations on mobile now scrolls to the latest message instead of staying mid-transcript.** A stale manual-unpin flag left over from a stray touch event during session loading no longer blocks scroll-to-bottom; the scroll state is reset at the start of a genuine session switch. Thanks @jcarvine. (#4780)
+
 ## [v0.51.603] — 2026-06-23 — Release VJ (cache the app-shell template)
 
 ### Changed
