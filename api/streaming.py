@@ -6384,10 +6384,22 @@ def _run_agent_streaming(
                 candidate = _compact_for_echo_compare(text)
                 if not candidate:
                     return False
+                visible_output = STREAM_PARTIAL_TEXT.get(stream_id, '')
                 visible_tail = _compact_for_echo_compare(
-                    STREAM_PARTIAL_TEXT.get(stream_id, '')[-max(len(str(text)) * 2, 512):]
+                    visible_output[-max(len(str(text)) * 2, 512):]
                 )
-                return bool(visible_tail and visible_tail.endswith(candidate))
+                if visible_tail and visible_tail.endswith(candidate):
+                    return True
+                # Some runtimes can report a prefix of the already-streamed final
+                # answer through reasoning after visible output has completed. That
+                # prefix is not a tail echo, so catch only substantial chunks that
+                # are already present in the visible assistant stream. Short text
+                # stays on the stricter suffix path to avoid hiding genuine
+                # reasoning that happens to reuse an answer phrase.
+                if len(candidate) < 80:
+                    return False
+                visible_compact = _compact_for_echo_compare(visible_output)
+                return bool(visible_compact and candidate in visible_compact)
 
             def _strip_reasoning_output_echo(text: str) -> bool:
                 nonlocal _reasoning_segments
