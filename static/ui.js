@@ -3710,6 +3710,7 @@ let _programmaticScrollResetTimer=0;
 function _deferClearProgrammaticScroll(ms){clearTimeout(_programmaticScrollResetTimer);_programmaticScrollResetTimer=setTimeout(()=>{_programmaticScroll=false;},ms||80);}
 let _nearBottomCount=0;
 let _lastScrollTop=null;
+let _lastMessageClientHeight=null;   // #4702: track scroller height to ignore iOS portrait toolbar-settle reflows (a clientHeight increase fires a scroll event with decreased scrollTop that is NOT a user scroll)
 // Sticky-unpin model (#3343 supersedes #3330's proximity re-pin): once the user
 // scrolls up, streaming stops auto-following until they return to the bottom or
 // click ↓. The upward-intent TIMEOUT mechanism (_lastMessageUpwardIntentMs /
@@ -3846,6 +3847,7 @@ if(typeof document!=='undefined'){
 function _resetScrollDirectionTracker(){
   _clearNewMessageScrollCue();
   _lastScrollTop=null;
+  _lastMessageClientHeight=null;
   _messageUserUnpinned=false;
   _scrollPinned=true;
   _nearBottomCount=0;
@@ -3967,7 +3969,17 @@ if(typeof window!=='undefined'){
       const top=el.scrollTop;
       const bottomDistance=el.scrollHeight-top-el.clientHeight;
       const nearBottom=bottomDistance<250;
-      const movedUp=_lastScrollTop!==null&&top<_lastScrollTop-2;
+      // #4702: iOS Safari (esp. portrait) resolves its dynamic toolbar height
+      // AFTER first paint. When the toolbar collapses the scroller GROWS
+      // (clientHeight increases), which fires a scroll event with a DECREASED
+      // scrollTop even though the user never scrolled. Without this guard that
+      // reflow is misread as an upward scroll and falsely unpins a freshly-opened
+      // session, stranding portrait readers at the top (sibling: #4701). On
+      // desktop/landscape the scroller height is stable, so `grew` is always
+      // false and behavior is byte-identical.
+      const grew=_lastMessageClientHeight!==null&&el.clientHeight>_lastMessageClientHeight+1;
+      _lastMessageClientHeight=el.clientHeight;
+      const movedUp=!grew&&_lastScrollTop!==null&&top<_lastScrollTop-2;
       const movedDown=_lastScrollTop!==null&&top>_lastScrollTop+2;
       _lastScrollTop=top;
       if(movedUp){
@@ -4568,6 +4580,12 @@ function _settleMessageScrollToBottom(force, explicit){
   });
   _settleRO=ro;
   ro.observe(observed);
+  // #4702: for an explicit (user/open) settle, also observe the SCROLLER itself.
+  // On iOS the transcript content (#msgInner) may not resize, but the scroller
+  // grows when the portrait toolbar collapses after first paint — observing both
+  // re-anchors the bottom after that late viewport settle. Desktop never resizes
+  // here, so this is a no-op off-mobile.
+  if(explicit&&observed!==el){ try{ ro.observe(el); }catch(_){ } }
 
   // Static-content safety net: a fully-static response (no Prism/KaTeX/Mermaid/
   // late images) never resizes after the initial sync write, so the
