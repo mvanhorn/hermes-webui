@@ -2688,6 +2688,8 @@ function openKanbanCreate(){
     }
   });
   _kanbanPopulateTenantDatalist();
+  _kanbanPopulateWorkspacePathDatalist();
+  _kanbanPopulateParentsDatalist();
   modal.hidden = false;
   if (_kanbanTaskModalFocusCleanup) {
     _kanbanTaskModalFocusCleanup();
@@ -2778,6 +2780,9 @@ function _kanbanResetTaskModalFields(values){
   // .value before the options exist would silently fail.
   set('kanbanTaskModalTenant', v.tenant || '');
   set('kanbanTaskModalPriority', v.priority != null ? v.priority : 0);
+  set('kanbanTaskModalSkills', Array.isArray(v.skills) ? v.skills.join(', ') : (v.skills || ''));
+  set('kanbanTaskModalMaxRuntimeSeconds', v.max_runtime_seconds != null ? v.max_runtime_seconds : '');
+  set('kanbanTaskModalParents', '');
   const errEl = document.getElementById('kanbanTaskModalError');
   if (errEl) { errEl.textContent = ''; delete errEl.dataset.warningShown; }
   const submitBtn = document.getElementById('kanbanTaskModalSubmit');
@@ -2787,20 +2792,25 @@ function _kanbanResetTaskModalFields(values){
 function _kanbanSetTaskModalLabels(mode){
   const titleH = document.getElementById('kanbanTaskModalTitle');
   const submitBtn = document.getElementById('kanbanTaskModalSubmit');
-  const workspaceKindEl = document.getElementById('kanbanTaskModalWorkspaceKind');
-  const workspacePathEl = document.getElementById('kanbanTaskModalWorkspacePath');
   if (mode === 'edit') {
     if (titleH) titleH.textContent = t('kanban_edit_task') || 'Edit task';
     if (submitBtn) submitBtn.textContent = t('save') || 'Save';
-    // Disable workspace fields during edit since they are not handled by the backend
-    if (workspaceKindEl) workspaceKindEl.disabled = true;
-    if (workspacePathEl) workspacePathEl.disabled = true;
   } else {
     if (titleH) titleH.textContent = t('kanban_new_task') || 'New task';
     if (submitBtn) submitBtn.textContent = t('create') || 'Create';
-    // Enable workspace fields during create
-    if (workspaceKindEl) workspaceKindEl.disabled = false;
-    if (workspacePathEl) workspacePathEl.disabled = false;
+  }
+  // Workspace and new backend fields are create-only; backend patch doesn't handle them.
+  const createOnlyIds = [
+    'kanbanTaskModalWorkspaceKind',
+    'kanbanTaskModalWorkspacePath',
+    'kanbanTaskModalSkills',
+    'kanbanTaskModalMaxRuntimeSeconds',
+    'kanbanTaskModalParents',
+  ];
+  const disabled = mode === 'edit';
+  for (const id of createOnlyIds) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = disabled;
   }
 }
 
@@ -2821,6 +2831,27 @@ function _kanbanPopulateTenantDatalist(){
   const tenants = (_kanbanBoard && Array.isArray(_kanbanBoard.tenants)) ? _kanbanBoard.tenants : [];
   const tList = document.getElementById('kanbanTaskModalTenantList');
   if (tList) tList.innerHTML = tenants.map(v => `<option value="${esc(v)}"></option>`).join('');
+}
+
+function _kanbanPopulateWorkspacePathDatalist(){
+  const cols = (_kanbanBoard && _kanbanBoard.columns) || [];
+  const seen = new Set();
+  const opts = [];
+  for (const col of cols) {
+    for (const task of (col.tasks || [])) {
+      const path = task && task.workspace_path;
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      opts.push(`<option value="${esc(path)}"></option>`);
+    }
+  }
+  const list = document.getElementById('kanbanTaskModalWorkspacePathList');
+  if (list) list.innerHTML = opts.join('');
+}
+
+function _kanbanPopulateParentsDatalist(){
+  const list = document.getElementById('kanbanTaskModalParentsList');
+  if (list) list.innerHTML = _kanbanLinkableTaskOptions(null);
 }
 
 function _trapModalFocus(modalEl){
@@ -2911,6 +2942,9 @@ async function submitKanbanTaskModal(){
   const priorityEl = document.getElementById('kanbanTaskModalPriority');
   const workspaceKindEl = document.getElementById('kanbanTaskModalWorkspaceKind');
   const workspacePathEl = document.getElementById('kanbanTaskModalWorkspacePath');
+  const skillsEl = document.getElementById('kanbanTaskModalSkills');
+  const maxRuntimeEl = document.getElementById('kanbanTaskModalMaxRuntimeSeconds');
+  const parentsEl = document.getElementById('kanbanTaskModalParents');
   const errEl = document.getElementById('kanbanTaskModalError');
   const submitBtn = document.getElementById('kanbanTaskModalSubmit');
   const title = titleEl ? titleEl.value.trim() : '';
@@ -2939,6 +2973,9 @@ async function submitKanbanTaskModal(){
   const statusVal = statusEl ? statusEl.value : '';
   const priorityRaw = priorityEl ? priorityEl.value : '';
   const workspacePathVal = workspacePathEl ? workspacePathEl.value.trim() : '';
+  const skillsRaw = skillsEl ? skillsEl.value.trim() : '';
+  const maxRuntimeRaw = maxRuntimeEl ? maxRuntimeEl.value.trim() : '';
+  const parentsRaw = parentsEl ? parentsEl.value.trim() : '';
   if (isEdit) {
     payload.body = bodyVal;
     payload.assignee = assigneeVal || null;
@@ -2965,6 +3002,12 @@ async function submitKanbanTaskModal(){
     }
     payload.workspace_kind = workspaceKind;
     if (workspacePathVal) payload.workspace_path = workspacePathVal;
+    if (skillsRaw) {
+      payload.skills = skillsRaw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    const maxRuntimeN = maxRuntimeRaw !== '' ? parseInt(maxRuntimeRaw, 10) : NaN;
+    if (!Number.isNaN(maxRuntimeN) && maxRuntimeN > 0) payload.max_runtime_seconds = maxRuntimeN;
+    if (parentsRaw) payload.parents = [parentsRaw];
   }
   // Soft warning: a Ready task with the explicit "Unassigned" option will sit
   // forever because the dispatcher skips unassigned rows (kanban_db.py:3567).
