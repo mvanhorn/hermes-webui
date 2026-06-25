@@ -82,6 +82,7 @@ _MAX_ZIP_DOWNLOAD_BYTES = 32 * 1024 * 1024
 _REGISTRY_URL = "https://hermes-webui.github.io/hermes-webui-extensions/registry.json"
 _REGISTRY_ALLOWED_DOWNLOAD_HOST = "hermes-webui.github.io"
 _REGISTRY_CACHE: dict = {}
+_REGISTRY_LOCK = threading.Lock()
 _REGISTRY_TTL_SECONDS = 300
 
 _EXTENSION_MIME = {
@@ -1024,31 +1025,31 @@ def install_extension(id: object, download_url: object, sha256: object) -> Dict[
                 version = mdata["version"]
         except Exception:
             pass
-    ext_dir.mkdir(parents=True, exist_ok=True)
-    rollback: List[Path] = []
-    try:
-        for member_name in member_names:
-            if not member_name or member_name.endswith("/"):
-                continue
-            decoded = _fully_unquote_path(member_name)
-            dest = (ext_dir / decoded).resolve()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(zf.read(member_name))
-            rollback.append(dest)
-    except Exception as exc:
-        for path in rollback:
+    with _EXTENSION_STATE_LOCK:
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        rollback: List[Path] = []
+        try:
+            for member_name in member_names:
+                if not member_name or member_name.endswith("/"):
+                    continue
+                decoded = _fully_unquote_path(member_name)
+                dest = (ext_dir / decoded).resolve()
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(zf.read(member_name))
+                rollback.append(dest)
+        except Exception as exc:
+            for path in rollback:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             try:
-                path.unlink(missing_ok=True)
+                if ext_dir.exists() and not any(ext_dir.iterdir()):
+                    ext_dir.rmdir()
             except OSError:
                 pass
+            raise ExtensionInstallError("Extraction failed", 500) from exc
         try:
-            if ext_dir.exists() and not any(ext_dir.iterdir()):
-                ext_dir.rmdir()
-        except OSError:
-            pass
-        raise ExtensionInstallError("Extraction failed", 500) from exc
-    try:
-        with _EXTENSION_STATE_LOCK:
             manifest = _load_install_manifest()
             from datetime import datetime, timezone
             manifest["installed"][ext_id] = {
@@ -1057,18 +1058,18 @@ def install_extension(id: object, download_url: object, sha256: object) -> Dict[
                 "installed_at": datetime.now(timezone.utc).isoformat(),
             }
             _write_install_manifest(manifest)
-    except Exception as exc:
-        for path in rollback:
+        except Exception as exc:
+            for path in rollback:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             try:
-                path.unlink(missing_ok=True)
+                if ext_dir.exists() and not any(ext_dir.iterdir()):
+                    ext_dir.rmdir()
             except OSError:
                 pass
-        try:
-            if ext_dir.exists() and not any(ext_dir.iterdir()):
-                ext_dir.rmdir()
-        except OSError:
-            pass
-        raise ExtensionInstallError("Failed to record install", 500) from exc
+            raise ExtensionInstallError("Failed to record install", 500) from exc
     return {"installed": True, "id": ext_id, "version": version}
 
 
@@ -1110,21 +1111,22 @@ def uninstall_extension(id: object) -> Dict[str, Any]:
 
 def get_extension_registry() -> Dict[str, Any]:
     """Fetch the extension registry with a 5-minute TTL cache."""
-    now = time.monotonic()
-    cached = _REGISTRY_CACHE.get("data")
-    cached_at = _REGISTRY_CACHE.get("fetched_at", 0.0)
-    if cached is not None and (now - cached_at) < _REGISTRY_TTL_SECONDS:
-        return {"entries": cached}
-    try:
-        raw = urlopen(_REGISTRY_URL, timeout=10).read(2 * 1024 * 1024)
-        data = json.loads(raw.decode("utf-8"))
-        if not isinstance(data, list):
-            data = data.get("entries", []) if isinstance(data, dict) else []
-        _REGISTRY_CACHE["data"] = data
-        _REGISTRY_CACHE["fetched_at"] = now
-        return {"entries": data}
-    except Exception:
-        return {"entries": [], "error": "registry_unavailable"}
+    with _REGISTRY_LOCK:
+        now = time.monotonic()
+        cached = _REGISTRY_CACHE.get("data")
+        cached_at = _REGISTRY_CACHE.get("fetched_at", 0.0)
+        if cached is not None and (now - cached_at) < _REGISTRY_TTL_SECONDS:
+            return {"entries": cached}
+        try:
+            raw = urlopen(_REGISTRY_URL, timeout=10).read(2 * 1024 * 1024)
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, list):
+                data = data.get("entries", []) if isinstance(data, dict) else []
+            _REGISTRY_CACHE["data"] = data
+            _REGISTRY_CACHE["fetched_at"] = now
+            return {"entries": data}
+        except Exception:
+            return {"entries": [], "error": "registry_unavailable"}
 
 
 def inject_extension_tags(index_html: str) -> str:
