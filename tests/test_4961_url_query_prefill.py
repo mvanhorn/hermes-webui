@@ -228,3 +228,8 @@ console.log(JSON.stringify({
     assert 0 <= consume_pos < new_pos
     assert 0 <= consume_pos < load_pos
     assert 0 <= check_pos < apply_pos
+    zero_message_pos = BOOT_JS.find(
+        "await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();await _applyComposerPrefillOnBoot(prefillIntent);",
+        load_pos,
+    )
+    assert zero_message_pos > load_pos
