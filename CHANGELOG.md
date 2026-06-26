@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.682] — 2026-06-26 — Release YL (faster long-session open — indexed compression-continuation lookup)
+
+### Fixed
+
+- **Opening a session with a compression snapshot is faster, and still resolves to the correct live continuation.** The pre-compression snapshot continuation lookup scanned and JSON-parsed every session sidecar to find the live child; it now uses the session index as a fast path (one directory listing + one index read, no per-sidecar parse). Correctness is preserved by a membership-completeness guard: if any persisted continuation sidecar is missing from the index, the lookup falls back to the full sidecar scan — so a stale index can't silently drop a continuation and surface the archived snapshot instead of the live conversation. The index parse no longer mutates the shared ancestor set, and ties on `updated_at` resolve deterministically by `session_id` so the fast path and the scan path are byte-identical. Thanks @franksong2702. (#4991, fixes #4990)
+
 ## [v0.51.681] — 2026-06-26 — Release YK (Anthropic shows in the model picker when configured via OAuth token)
 
 ### Fixed
