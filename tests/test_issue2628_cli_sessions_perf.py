@@ -91,7 +91,15 @@ def _newest_first_reference_ids(db_path, *, include_sources=None, exclude_source
         conn.close()
 
 
-def _execute_candidate_ordering_baseline_sql(db_path, candidate_limit, *, budget_ops, include_sources=None, exclude_sources=("webui",)):
+def _execute_candidate_ordering_baseline_sql(
+    db_path,
+    candidate_limit,
+    *,
+    budget_ops,
+    interval=1,
+    include_sources=None,
+    exclude_sources=("webui",),
+):
     where_clauses = ["s.source IS NOT NULL"]
     params = []
     if include_sources:
@@ -110,7 +118,7 @@ def _execute_candidate_ordering_baseline_sql(db_path, candidate_limit, *, budget
 
     steps = 0
     conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
-    conn.set_progress_handler(_on_progress, 1)
+    conn.set_progress_handler(_on_progress, interval)
     try:
         return conn.execute(
             f"""
@@ -200,28 +208,35 @@ def test_importable_agent_rows_push_sidebar_limit_into_sql(tmp_path):
     assert "WITH candidates AS" in src
     assert "JOIN candidates c ON c.id = s.id" in src
     assert "latest_messages AS" in src
+    assert "LEFT JOIN latest_messages lm ON lm.session_id = s.id" in src
     assert 'included == ("cron",)' in src
-    assert "_CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES" in src
+    assert "not messages_index_present" in src
+    assert "PRAGMA index_list(messages)" in src
+    assert "CREATE INDEX IF NOT EXISTS idx_messages_session" in src
+    assert "_CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES" not in src
     assert "MAX(mx.timestamp) FROM messages mx WHERE mx.session_id = s.id" in src
     assert "candidate_limit = max(result_limit * 8, result_limit)" in src
 
 
-def test_importable_agent_rows_candidate_ordering_respects_progress_budget(tmp_path, monkeypatch):
-    """Cron-only candidate ordering should fail under the old shape budget, then pass after pre-aggregation."""
+def test_importable_agent_rows_candidate_ordering_stays_under_progress_budget(tmp_path, monkeypatch):
+    """Cron-only missing-index scans should fail under the old shape budget, then pass after pre-aggregation."""
     db = tmp_path / "state.db"
     _make_state_db(
         db,
         sessions=120,
         messages_per_session=900,
-        create_messages_index=True,
+        create_messages_index=False,
         source="cron",
         session_source="cron",
     )
     reference_ids = _newest_first_reference_ids(db, include_sources=("cron",), exclude_sources=None)
     candidate_limit = max(20 * 8, 20)
+    progress_interval = 100
 
     original_connect = agent_sessions.sqlite3.connect
-    connect_with_progress_counter, progress_counter = _make_connect_with_progress_counter(interval=1)
+    connect_with_progress_counter, progress_counter = _make_connect_with_progress_counter(
+        interval=progress_interval
+    )
     monkeypatch.setattr(agent_sessions.sqlite3, "connect", connect_with_progress_counter)
     try:
         measured_rows = agent_sessions.read_importable_agent_session_rows(
@@ -236,15 +251,16 @@ def test_importable_agent_rows_candidate_ordering_respects_progress_budget(tmp_p
         # counting handler to validate raw cost differences.
         monkeypatch.setattr(agent_sessions.sqlite3, "connect", original_connect)
 
-    # Give the head path a deterministic margin while preserving a strict cap
-    # that a single-pass candidate-ordering query can still satisfy.
-    progress_budget_ops = max(progress_counter["count"] + 2500, 1)
+    # Give the head path a small deterministic margin, then require the old
+    # correlated query to exceed the same budget on the missing-index branch.
+    progress_budget_ops = max(progress_counter["count"] + 200, 1)
 
     with pytest.raises(sqlite3.OperationalError, match="interrupted"):
         _execute_candidate_ordering_baseline_sql(
             db,
             candidate_limit,
             budget_ops=progress_budget_ops,
+            interval=progress_interval,
             include_sources=("cron",),
             exclude_sources=None,
         )
@@ -254,7 +270,7 @@ def test_importable_agent_rows_candidate_ordering_respects_progress_budget(tmp_p
         "connect",
         _make_connect_with_progress_budget(
             budget_ops=progress_budget_ops,
-            interval=1,
+            interval=progress_interval,
         ),
     )
 

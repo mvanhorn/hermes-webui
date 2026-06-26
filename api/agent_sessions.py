@@ -19,7 +19,6 @@ MESSAGING_SOURCES = {
 
 CLI_MIN_UNTITLED_MESSAGE_COUNT = 6
 CLI_MIN_UNTITLED_USER_MESSAGE_COUNT = 2
-_CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES = 100000
 
 SOURCE_LABELS = {
     'api_server': 'API',
@@ -493,37 +492,28 @@ def read_importable_agent_session_rows(
         use_messages_join = messages_has_session_id
         count_col = 'id' if 'id' in message_cols else 'session_id'
 
-        # Defensive index prime (#3887). The candidate-ordering path below now
-        # builds a pre-aggregated latest-message relation over ``messages`` and
-        # the final grouped projection still joins ``messages`` by ``session_id``.
-        # Both stay fast only when the agent's standard
-        # ``idx_messages_session ON messages(session_id, timestamp)`` index exists.
-        # A normally-migrated hermes-agent state.db has it, but a db that lost its
-        # migrations (older hermes-agent, or a hand-rebuilt/reimported db) does
-        # not — and the aggregate scan then degrades into a much more expensive
-        # walk over ``messages``, stalling ``/api/sessions`` on large stores.
-        # Priming the index is a no-op (~free) when it already exists, and
-        # self-heals an affected db in milliseconds. Best-effort: degrade
-        # silently on a read-only db or any error so the listing never fails
-        # because of the prime.
-        messages_index_ready = False
-        messages_rowid_upper_bound = None
+        # Defensive index prime (#3887). The normal candidate-ordering shape uses
+        # the agent's standard ``idx_messages_session ON messages(session_id,
+        # timestamp)`` index; without it, large cron-only scans degrade badly.
+        # Writable dbs self-heal by recreating the index. Read-only or locked dbs
+        # fall back to the pre-aggregated cron-only path below instead of failing.
+        messages_index_present = False
         if messages_has_session_id and messages_has_timestamp:
             try:
-                cur.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_messages_session "
-                    "ON messages(session_id, timestamp)"
-                )
-                conn.commit()
-                messages_index_ready = True
+                cur.execute("PRAGMA index_list(messages)")
+                messages_index_present = any(str(row[1]) == "idx_messages_session" for row in cur.fetchall())
+            except sqlite3.Error:
+                messages_index_present = False
+            try:
+                if not messages_index_present:
+                    cur.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_session "
+                        "ON messages(session_id, timestamp)"
+                    )
+                    conn.commit()
+                    messages_index_present = True
             except sqlite3.Error:
                 pass  # read-only db / locked / older schema — degrade gracefully
-            try:
-                cur.execute("SELECT MAX(rowid) FROM messages")
-                row = cur.fetchone()
-                messages_rowid_upper_bound = int(row[0] or 0) if row else 0
-            except sqlite3.Error:
-                messages_rowid_upper_bound = None
 
         if use_messages_join:
             actual_count_expr = f"COUNT(m.{count_col})"
@@ -567,10 +557,7 @@ def read_importable_agent_session_rows(
             use_messages_join
             and messages_has_timestamp
             and included == ("cron",)
-            and (
-                not messages_index_ready
-                or (messages_rowid_upper_bound or 0) >= _CRON_PREAGGREGATE_CANDIDATE_ORDER_MIN_MESSAGES
-            )
+            and not messages_index_present
         )
         if use_preaggregated_candidate_order:
             order_by_clause = "ORDER BY COALESCE(MAX(m.timestamp), s.started_at) DESC"
