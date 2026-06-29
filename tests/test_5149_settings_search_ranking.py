@@ -384,16 +384,16 @@ function setupDom(mode) {
   if (mode === 'title-vs-description') {
     conversation.appendChild(makeSettingsField({
       labelText: 'Descriptor-only field',
-      descriptionText: 'this contains priority in the descriptor',
+      descriptionI18nKey: 'settings_desc_priority_only',
     }));
     conversation.appendChild(makeSettingsField({
       labelText: 'Priority title field',
-      descriptionText: 'nothing about query there',
+      descriptionI18nKey: 'settings_desc_irrelevant',
     }));
   } else if (mode === 'value-vs-description') {
     conversation.appendChild(makeSettingsField({
       labelText: 'Value-later field',
-      descriptionText: 'contains rank token in descriptor only',
+      descriptionI18nKey: 'settings_desc_rank_only',
     }));
     conversation.appendChild(makeSettingsField({
       labelText: 'Value field',
@@ -401,12 +401,16 @@ function setupDom(mode) {
     }));
   } else if (mode === 'same-tier-order') {
     conversation.appendChild(makeSettingsField({
-      labelText: 'Description-first',
-      descriptionText: 'first field has needle around index 5',
+      labelText: 'Description-prefix',
+      descriptionI18nKey: 'settings_desc_needle_prefix',
     }));
     conversation.appendChild(makeSettingsField({
-      labelText: 'Description-second',
-      descriptionText: 'second field has the needle a little later in the text',
+      labelText: 'Description-earlier-contains',
+      descriptionI18nKey: 'settings_desc_needle_contains_early',
+    }));
+    conversation.appendChild(makeSettingsField({
+      labelText: 'Description-later-contains',
+      descriptionI18nKey: 'settings_desc_needle_contains_late',
     }));
   } else if (mode === 'label-rendering') {
     conversation.appendChild(makeSettingsField({
@@ -459,6 +463,12 @@ function runScenario(command) {
           settings_tab_extensions: 'Extensions',
           settings_tab_system: 'System',
           settings_tab_help: 'Help',
+          settings_desc_priority_only: 'this contains priority in the descriptor',
+          settings_desc_irrelevant: 'nothing about query there',
+          settings_desc_rank_only: 'contains rank token in descriptor only',
+          settings_desc_needle_prefix: 'needle appears at the start of this description',
+          settings_desc_needle_contains_early: 'this field has needle near the front',
+          settings_desc_needle_contains_late: 'this field waits a while before it reaches needle',
         };
         return translations[key] || String(key || '');
       };
@@ -546,8 +556,9 @@ def test_value_or_option_match_outranks_descriptor_match(driver_file):
 
 def test_same_tier_order_uses_prefix_and_earlier_index(driver_file):
     payload = _run_driver(driver_file, "same-tier-order")
-    assert payload["labels"][0] == "Description-first"
-    assert payload["labels"][1] == "Description-second"
+    assert payload["labels"][0] == "Description-prefix"
+    assert payload["labels"][1] == "Description-earlier-contains"
+    assert payload["labels"][2] == "Description-later-contains"
 
 
 def test_rendered_label_is_visible_field_title(driver_file):
