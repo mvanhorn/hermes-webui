@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **Mobile titlebar now prioritizes the session title, with tap-to-reveal and long-press actions.** On mobile the titlebar gives the session title priority (ellipsized when long) over surrounding chrome; tapping the title reveals the full title in a popover, and a long-press opens the session actions. Listener-leak-safe (tap wired once per element, outside-click handler cleaned up on dismiss/switch; long-press guarded against double-fire, cancelled on touchmove). Read-only sessions are skipped, and desktop is untouched (touch-gated). Thanks @rodboev. (#4574, #4520)
+
 - **Mobile approval dialog and touch targets are easier to tap.** At mobile width the approval card's action buttons now lay out as a clean 2-column grid (Allow once / Allow session / Always allow / Deny) with the "Skip all this session" YOLO button full-width below, every button at a 44px minimum touch target; the titlebar new-chat/reload and the mobile sidebar-close controls are also bumped to 44px. Mobile-scoped (inside the mobile media query) — desktop layout is unchanged. Thanks @disco32r. (#5019)
 
 - **`/pet` now works in the WebUI, handing off to the Desktop Companion extension.** Typing `/pet` (and its subcommands) is intercepted client-side and routed to the petdex companion extension with graceful per-stage guidance when the extension isn't installed; the command output is XSS-safe. Thanks @rodboev. (#5168, #4843)
