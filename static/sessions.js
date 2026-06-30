@@ -5677,10 +5677,6 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions, rawRefere
     const childLineageKey=child&&(child._lineage_root_id||child.lineage_root_id||child.parent_session_id);
     const isHiddenLineageReferenceChild=!!(child&&child.archived&&child.parent_session_id&&childLineageKey&&!child.pinned&&!childRenderable);
     if(!_isChildSession(child)&&!isForkChild&&!isHiddenLineageReferenceChild) continue;
-    if(!isForkChild&&child._cross_surface_child_session){
-      if(childRenderable) orphans.push({...child,_orphan_child_session:true});
-      continue;
-    }
     const parentSid=child.parent_session_id;
     let parentRow=visibleBySid.get(parentSid);
     let parentSegment=null;
@@ -5697,6 +5693,25 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions, rawRefere
     }
     if(!parentRow&&hasHiddenArchivedAncestor(child)){
       hiddenArchivedChildTree.add(child.session_id);
+      continue;
+    }
+    // Cross-surface rows (for example a WebUI continuation from a Telegram
+    // conversation) should remain top-level when there is no WebUI-owned parent
+    // row to stack under.  But if the parent is visible in this same sidebar
+    // render, attach normally — delegated subagent rows are also cross-source
+    // relative to their WebUI parent and should not be forced into orphans.
+    const parentSourceMarker=String(parentRow&&(
+      parentRow.session_source||parentRow.raw_source||parentRow.source_tag||parentRow.source
+    )||'').toLowerCase();
+    const parentIsExternal=parentRow&&(
+      (typeof _isExternalSession==='function'&&_isExternalSession(parentRow))||
+      (typeof _isMessagingSession==='function'&&_isMessagingSession(parentRow))||
+      parentRow.is_cli_session===true||
+      parentRow.session_source==='messaging'||
+      (parentSourceMarker&&parentSourceMarker!=='webui'&&parentSourceMarker!=='subagent'&&parentSourceMarker!=='other'&&parentSourceMarker!=='fork')
+    );
+    if(parentRow&&child._cross_surface_child_session&&parentIsExternal){
+      if(childRenderable) orphans.push({...child,_orphan_child_session:true});
       continue;
     }
     if(parentRow){

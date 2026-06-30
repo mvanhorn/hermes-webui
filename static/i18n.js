@@ -614,6 +614,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar',
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.',
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -2253,6 +2255,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -3883,6 +3887,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -6225,6 +6231,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -7780,6 +7788,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -9016,6 +9026,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -10925,6 +10937,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -11782,6 +11796,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: '在標題列顯示設定檔切換器',
     settings_desc_show_titlebar_profile: '啟用後，左上角的應用程式標題列會出現設定檔切換按鈕，讓你在任何分頁都能切換設定檔。預設關閉；無論此設定為何，輸入列底部一律保留設定檔切換器。',
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -13309,6 +13325,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -14838,6 +14856,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -16480,6 +16500,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Afficher le sélecteur de profil dans la barre de titre',
     settings_desc_show_titlebar_profile: 'Lorsqu\'il est activé, un bouton de sélection de profil apparaît dans la barre de titre en haut à gauche de l\'application, vous permettant de changer de profil depuis n\'importe quel onglet. Désactivé par défaut ; le pied de page du compositeur dispose toujours d\'un sélecteur de profil, indépendamment de ce paramètre.',
     settings_desc_render_user_markdown: 'Lorsqu\'il est activé, le gras, l\'italique, les liens et autres éléments markdown dans vos propres messages sont rendus. Désactivé par défaut ; les blocs de code et les formules mathématiques sont toujours rendus, indépendamment de ce paramètre.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'Blocs de code JSON/YAML',
     settings_option_structured_code_auto: 'Auto : Arborescence pour les blocs longs',
     settings_option_structured_code_on: 'Arborescence par défaut',
@@ -18078,6 +18100,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Show profile switcher in titlebar', // TODO: translate
     settings_desc_show_titlebar_profile: 'When enabled, a profile switcher button appears in the top-left app titlebar so you can change profiles from any tab. Off by default; the composer footer always has a profile switcher regardless of this setting.', // TODO: translate
     settings_desc_render_user_markdown: 'When enabled, bold, italic, links, and other markdown in your own messages are rendered. Off by default; fenced code blocks and math always render regardless of this setting.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'JSON/YAML code blocks',
     settings_option_structured_code_auto: 'Auto: Tree for long blocks',
     settings_option_structured_code_on: 'Tree by default',
@@ -19728,6 +19752,8 @@ const LOCALES = {
     settings_option_structured_code_off: 'Domyślnie widok źródła',
     settings_label_structured_code_auto_lines: 'Próg wierszy dla trybu automatycznego',
     settings_desc_structured_code: 'Gdy wybrano tryb automatyczny, bloki JSON/YAML o długości przynajmniej podanej liczby wierszy zostaną otwarte w widoku drzewa. Widok drzewa zawsze otwiera strukturyzowaną przeglądarkę; widok źródła zachowuje podświetlony składniowo tekst. Nadal możesz przełączać tryby dla każdego bloku osobno.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_worklog_details_expanded_default: 'Otwieraj szczegóły Worklog automatycznie',
     settings_desc_worklog_details_expanded_default: 'Gdy ta opcja jest włączona, nowe szczegóły Worklog zaczynają rozwinięte, dzięki czemu karty narzędzi, Thinking i postępu są widoczne bez dodatkowego kliknięcia. Gdy jest wyłączona, szczegóły Worklog pozostają domyślnie zwinięte. Ręczne decyzje o zwinięciu/rozwinięciu w danej turze mają pierwszeństwo.',
     settings_label_chat_activity_display_mode: 'Wyświetlanie aktywności',
@@ -21254,6 +21280,8 @@ const LOCALES = {
     settings_label_show_titlebar_profile: 'Hiển thị bộ chuyển profile trên thanh tiêu đề',
     settings_desc_show_titlebar_profile: 'Khi bật, nút chuyển profile sẽ xuất hiện ở góc trên bên trái thanh tiêu đề ứng dụng để bạn đổi profile từ bất kỳ tab nào. Mặc định tắt; chân khung soạn thảo luôn có bộ chuyển profile dù cài đặt này thế nào.',
     settings_desc_render_user_markdown: 'Khi bật, chữ đậm, chữ nghiêng, liên kết và các Markdown khác trong tin nhắn của bạn sẽ được render. Mặc định tắt; khối code fenced và công thức toán luôn được render bất kể cài đặt này.',
+    settings_label_large_text_paste_as_attachment: 'Attach large pasted text as file',
+    settings_desc_large_text_paste_as_attachment: 'When enabled, long pasted text becomes a .md attachment instead of filling the composer.',
     settings_label_structured_code: 'Khối code JSON/YAML',
     settings_option_structured_code_auto: 'Tự động: dạng cây cho khối dài',
     settings_option_structured_code_on: 'Mặc định dạng cây',
