@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **Mermaid diagrams in chat now have on-diagram zoom / pan / fit / fullscreen controls.** A GitHub-style toolbar (zoom in, zoom out, reset, fit, fullscreen) mounts on each rendered Mermaid diagram so large flowcharts are navigable in place instead of static; zoom is clamped 0.25×–8×, a drag is suppressed from opening the lightbox accidentally while a clean click still opens it, and the Mermaid source is HTML-escaped (no XSS). Thanks @rodboev. (#4871, #4814)
+
 - **Mobile titlebar now prioritizes the session title, with tap-to-reveal and long-press actions.** On mobile the titlebar gives the session title priority (ellipsized when long) over surrounding chrome; tapping the title reveals the full title in a popover, and a long-press opens the session actions. Listener-leak-safe (tap wired once per element, outside-click handler cleaned up on dismiss/switch; long-press guarded against double-fire, cancelled on touchmove). Read-only sessions are skipped, and desktop is untouched (touch-gated). Thanks @rodboev. (#4574, #4520)
 
 - **Mobile approval dialog and touch targets are easier to tap.** At mobile width the approval card's action buttons now lay out as a clean 2-column grid (Allow once / Allow session / Always allow / Deny) with the "Skip all this session" YOLO button full-width below, every button at a 44px minimum touch target; the titlebar new-chat/reload and the mobile sidebar-close controls are also bumped to 44px. Mobile-scoped (inside the mobile media query) — desktop layout is unchanged. Thanks @disco32r. (#5019)
