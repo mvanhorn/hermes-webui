@@ -4733,6 +4733,20 @@ def _get_or_materialize_session(sid: str, *, refresh_cli_messages: bool = False)
 
     # Fallback: try to materialize from CLI/agent session metadata
     cli_meta = _lookup_cli_session_metadata(sid)
+
+    # Delegated subagent children (#5307) are view-only: their transcript lives
+    # in state.db and ownership belongs to the delegate runner, not WebUI. They
+    # must never be materialized as a writable sidecar here — this is the shared
+    # chokepoint reached by POST /api/chat/start (_get_or_materialize_session),
+    # so gating it closes the write path that bypasses the GET/import_cli guards.
+    # Checked via state.db source (independent of cli_meta, which is often empty
+    # for a server-side subagent child).
+    _mat_source_tag = (
+        (cli_meta or {}).get("source_tag") or (cli_meta or {}).get("raw_source") or ""
+    ).strip().lower()
+    if _mat_source_tag == "subagent" or _is_subagent_child_session_id(sid):
+        raise PermissionError("read-only subagent child session")
+
     if not cli_meta:
         raise KeyError(sid)
 

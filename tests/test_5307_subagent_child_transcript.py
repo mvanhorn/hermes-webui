@@ -282,3 +282,32 @@ def test_import_cli_endpoint_does_not_materialize_subagent_child():
         "the read-only-view gate must precede import_cli_session() so subagent "
         "children never materialize a writable sidecar"
     )
+
+
+def test_materialize_helper_refuses_subagent_child(routes_module, isolated_state_db):
+    """The shared _get_or_materialize_session chokepoint (reached by POST
+    /api/chat/start) must raise PermissionError for a subagent child, so no
+    entry point can turn a delegated child into a writable sidecar (#5307
+    Codex round 3 — the chat-start write path)."""
+    _make_state_db(
+        isolated_state_db["db"], "sa-mat-1", source="subagent", message_count=2,
+    )
+    with pytest.raises(PermissionError):
+        routes_module._get_or_materialize_session("sa-mat-1")
+
+
+def test_materialize_helper_still_allows_tui(routes_module, isolated_state_db):
+    """Guard scope check: a genuine TUI/CLI session is still materializable
+    (the subagent gate must not regress normal CLI/TUI/Desktop claiming)."""
+    _make_state_db(
+        isolated_state_db["db"], "tui-mat-1", source="tui", message_count=2,
+    )
+    # Should NOT raise PermissionError for a claimable tui source.
+    try:
+        routes_module._get_or_materialize_session("tui-mat-1")
+    except PermissionError:
+        pytest.fail("a genuine TUI session must remain materializable")
+    except Exception:
+        # Other errors (e.g. workspace/save plumbing under the minimal fixture)
+        # are out of scope; the contract here is: NOT a PermissionError.
+        pass
