@@ -2524,7 +2524,7 @@ async function populateModelDropdown(opts={}){
     if(data.active_provider) _fetchLiveModels(data.active_provider, sel, requestSeq);
     if(usedConfiguredFallback && requestedFreshness!=='session_visit' && !_modelCatalogFallbackRetried){
       _modelCatalogFallbackRetried=true;
-      populateModelDropdown({freshness:'session_visit'}).catch(()=>{});
+      populateModelDropdown({...opts,freshness:'session_visit'}).catch(()=>{});
     }
   }catch(e){
     if(requestSeq!==_modelDropdownRequestSeq) return;

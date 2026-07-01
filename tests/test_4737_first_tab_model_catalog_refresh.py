@@ -121,7 +121,12 @@ function buildHarness(currentScenario) {
   const select = new FakeSelect();
   const dropdown = new FakeNode('div');
   const fetchCalls = [];
-  const fetchQueue = (currentScenario.fetchResponses || []).map((payload) => buildFetchResponse(payload));
+  const defaultRedirectCalls = [];
+  const customRedirectCalls = [];
+  const fetchQueue = (currentScenario.fetchResponses || []).map((payload) => buildFetchResponse(
+    payload && payload.body ? payload.body : payload,
+    payload && payload.status ? payload.status : 200,
+  ));
 
   globalThis.window = globalThis;
   globalThis.document = {
@@ -158,7 +163,10 @@ function buildHarness(currentScenario) {
   globalThis.syncModelChip = () => {};
   globalThis.renderModelDropdown = () => {};
   globalThis._positionModelDropdown = () => {};
-  globalThis._redirectIfUnauth = () => false;
+  globalThis._redirectIfUnauth = (res) => {
+    defaultRedirectCalls.push(res.status);
+    return res.status === 401;
+  };
   globalThis.console = { warn() {}, debug() {}, log() {} };
   globalThis._fetchLiveModels = () => {};
   globalThis.fetch = async (url) => {
@@ -167,19 +175,28 @@ function buildHarness(currentScenario) {
     return fetchQueue.shift();
   };
 
-  return { select, fetchCalls };
+  return { select, fetchCalls, defaultRedirectCalls, customRedirectCalls };
 }
 
 async function runScenario(currentScenario) {
-  const { select, fetchCalls } = buildHarness(currentScenario);
+  const { select, fetchCalls, defaultRedirectCalls, customRedirectCalls } = buildHarness(currentScenario);
   let _modelDropdownRequestSeq = 0;
   let _modelCatalogFallbackRetried = false;
   eval(fnSource);
-  await populateModelDropdown(currentScenario.opts || {});
+  const callOpts = { ...(currentScenario.opts || {}) };
+  if (currentScenario.useCustomRedirect) {
+    callOpts.redirectIfUnauth = (res) => {
+      customRedirectCalls.push(res.status);
+      return res.status === 401;
+    };
+  }
+  await populateModelDropdown(callOpts);
   await Promise.resolve();
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
   return {
+    customRedirectCalls,
+    defaultRedirectCalls,
     fetchCalls,
     optionValues: select.options.map((opt) => opt.value),
   };
@@ -342,3 +359,37 @@ def test_populate_model_dropdown_retries_at_most_once_even_if_refetch_is_still_e
     assert len(payload["fetchCalls"]) == 2
     assert payload["fetchCalls"][1].endswith("freshness=session_visit")
     assert payload["optionValues"] == ["claude-sonnet-4"]
+
+
+def test_populate_model_dropdown_retry_preserves_custom_redirect_handler(driver_path):
+    payload = _run(
+        driver_path,
+        {
+            "useCustomRedirect": True,
+            "fetchResponses": [
+                {
+                    "active_provider": "anthropic",
+                    "default_model": "claude-sonnet-4",
+                    "configured_model_badges": {
+                        "claude-sonnet-4": {"provider": "anthropic"},
+                    },
+                    "groups": [],
+                },
+                {
+                    "status": 401,
+                    "body": {
+                        "active_provider": "anthropic",
+                        "default_model": "claude-sonnet-4",
+                        "configured_model_badges": {
+                            "claude-sonnet-4": {"provider": "anthropic"},
+                        },
+                        "groups": [],
+                    },
+                },
+            ],
+        },
+    )
+
+    assert payload["fetchCalls"][1].endswith("freshness=session_visit")
+    assert payload["customRedirectCalls"] == [200, 401]
+    assert payload["defaultRedirectCalls"] == []
