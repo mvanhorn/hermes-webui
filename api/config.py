@@ -7355,10 +7355,47 @@ _INDEX_HTML_PATH = REPO_ROOT / "static" / "index.html"
 
 # ── Thread synchronisation ───────────────────────────────────────────────────
 LOCK = threading.Lock()
-# Max compact Session objects held in the in-memory LRU (issue #3506). Lighter
-# than the agent cache (no live agent runtime), but still bounded and operator-
-# tunable via HERMES_WEBUI_SESSIONS_MAX for installs with hundreds of sessions.
-SESSIONS_MAX = _env_int("HERMES_WEBUI_SESSIONS_MAX", 100)
+# Max compact Session objects held in the in-memory LRU (issue #3506, #4765).
+# Lighter than the agent cache (no live agent runtime), but still bounded so a
+# long-running self-hosted install cannot accumulate every session it ever
+# touched in RAM and eventually segfault (the #4765/#2233/#4633 crash cluster).
+#
+# Precedence for the effective cap is resolved by get_sessions_cache_max():
+#   1. config.yaml  webui.sessions_cache_max   (preferred, no new env var)
+#   2. HERMES_WEBUI_SESSIONS_MAX env var        (legacy operator override)
+#   3. DEFAULT_SESSIONS_CACHE_MAX               (sane bounded default)
+DEFAULT_SESSIONS_CACHE_MAX = 300
+SESSIONS_MAX = _env_int("HERMES_WEBUI_SESSIONS_MAX", DEFAULT_SESSIONS_CACHE_MAX)
+
+
+def get_sessions_cache_max(config_data: dict | None = None) -> int:
+    """Return the effective in-memory SESSIONS cache cap (issue #4765).
+
+    The bound is configurable through ``webui.sessions_cache_max`` in
+    ``config.yaml`` so operators of large self-hosted installs can size the
+    cache without editing source or adding a new ``HERMES_*`` env var (this
+    project forbids new env vars for non-secret config). A missing, empty,
+    non-numeric, or below-1 value falls back to the legacy
+    ``HERMES_WEBUI_SESSIONS_MAX`` env override, then to
+    ``DEFAULT_SESSIONS_CACHE_MAX`` — a typo can never disable the bound and
+    reintroduce unbounded memory growth.
+    """
+    active_cfg = config_data if isinstance(config_data, dict) else get_config()
+    webui_cfg = active_cfg.get("webui", {}) if isinstance(active_cfg, dict) else {}
+    if isinstance(webui_cfg, dict):
+        raw = webui_cfg.get("sessions_cache_max")
+        if raw is not None:
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and value >= 1:
+                return value
+    # config.yaml did not specify a valid cap: honor the legacy env override
+    # (already parsed into SESSIONS_MAX) and finally the hardened default.
+    if isinstance(SESSIONS_MAX, int) and SESSIONS_MAX >= 1:
+        return SESSIONS_MAX
+    return DEFAULT_SESSIONS_CACHE_MAX
 CHAT_LOCK = threading.Lock()
 
 

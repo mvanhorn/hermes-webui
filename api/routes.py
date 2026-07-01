@@ -139,8 +139,7 @@ def _persist_generated_session_title(
         with LOCK:
             SESSIONS[sid] = session
             SESSIONS.move_to_end(sid)
-            while len(SESSIONS) > SESSIONS_MAX:
-                SESSIONS.popitem(last=False)
+            _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
     _sync_session_title_to_insights(session)
     _publish_session_list_changed(
         event_reason,
@@ -3480,8 +3479,7 @@ def _ensure_full_session_before_mutation(sid: str, session):
     with LOCK:
         SESSIONS[sid] = full_session
         SESSIONS.move_to_end(sid)
-        while len(SESSIONS) > SESSIONS_MAX:
-            SESSIONS.popitem(last=False)
+        _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
     return full_session
 
 
@@ -8022,6 +8020,7 @@ from api.models import (
     merge_session_messages_append_only,
     _enrich_sidebar_lineage_metadata,
     _active_stream_ids,
+    _evict_sessions_over_cap,
     _merge_session_display_metadata,
     _session_message_merge_key,
     _session_messages_have_prefix,
@@ -12551,8 +12550,7 @@ def handle_post(handler, parsed) -> bool:
             with LOCK:
                 SESSIONS[copied_session.session_id] = copied_session
                 SESSIONS.move_to_end(copied_session.session_id)
-                while len(SESSIONS) > SESSIONS_MAX:
-                    SESSIONS.popitem(last=False)
+                _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
             # Persist immediately. The pre-PR flow (/api/session/new + /api/session/rename)
             # accidentally avoided this because `/api/session/rename` calls `s.save()`.
             # Without this explicit save, the duplicate is in-memory only — if the user
@@ -13213,8 +13211,7 @@ def handle_post(handler, parsed) -> bool:
         with LOCK:
             SESSIONS[branch.session_id] = branch
             SESSIONS.move_to_end(branch.session_id)
-            while len(SESSIONS) > SESSIONS_MAX:
-                SESSIONS.popitem(last=False)
+            _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
 
         # Persist only if there are messages (matches new_session pattern)
         if forked_messages:
@@ -22673,8 +22670,7 @@ def _handle_session_import(handler, body):
     with LOCK:
         SESSIONS[s.session_id] = s
         SESSIONS.move_to_end(s.session_id)
-        while len(SESSIONS) > SESSIONS_MAX:
-            SESSIONS.popitem(last=False)
+        _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
     s.save()
     publish_session_list_changed("session_import")
     return j(handler, {"ok": True, "session": s.compact() | {"messages": s.messages}})

@@ -51,6 +51,7 @@ from api.turn_journal import append_turn_journal_event_for_stream
 from api.usage import prompt_cache_hit_percent
 from api.models import (
     _is_empty_partial_activity_message,
+    _evict_sessions_over_cap,
     get_state_db_session_messages,
     reconciled_state_db_messages_for_session,
 )
@@ -8266,8 +8267,7 @@ def _run_agent_streaming(
                                 )
                         SESSIONS[new_sid] = s
                         SESSIONS.move_to_end(new_sid)
-                        while len(SESSIONS) > SESSIONS_MAX:
-                            SESSIONS.popitem(last=False)
+                        _evict_sessions_over_cap()  # #4765: safe LRU eviction (never active/unsaved)
                     # Migrate the per-session lock: alias new_sid to the held
                     # _agent_lock reference directly (not via old_sid lookup),
                     # then remove the old_sid entry to prevent a leak.
