@@ -799,7 +799,7 @@ def test_transparent_stream_renders_persisted_anchor_scene_after_reload():
     # tool + thinking rows are rendered as transparent event rows
     assert "_decorateTransparentEventRow(_thinkingActivityNode" in row
     assert "_decorateTransparentEventRow(buildToolCard(toolCall)" in row
-    assert "_transparentToolStatus(toolCall,true)" in row
+    assert "_transparentToolStatus(toolCall,settled)" in row
     assert 'data-anchor-settled-scene-row' in row
     assert "if(anchorOwnedAssistantRawIdxs.has(aIdx)) continue;" in render
 
