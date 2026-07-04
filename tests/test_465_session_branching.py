@@ -218,8 +218,10 @@ def test_branch_endpoint_consults_foreign_session_guard_on_missing_sidecar():
         "Helper should classify missing-sidecar foreign sessions before returning"
     assert 'if _reason == "not_claimable":' in helper, \
         "Helper should branch on not_claimable foreign ownership"
-    assert 'is_cron_session(' in helper, \
-        "Helper should narrow read-only branch sources to canonical cron sessions"
+    assert '_source_kind == "cron"' in helper, \
+        "Helper should narrow read-only branch sources to resolved cron source metadata"
+    assert 'is_cron_session(' not in helper, \
+        "Helper should not use the cron_ session-id prefix as a branch permission gate"
     assert '_foreign_session._branch_source_readonly = True' in helper, \
         "Helper should mark synthesized read-only sources so branch does not save them"
     assert 'return _foreign_session' in helper, \
@@ -537,7 +539,7 @@ def test_branchable_read_only_helper_accepts_cron_sources():
     assert "session && session.source_tag" in src
     assert "session && session.raw_source" in src
     assert "sources.includes('cron')" in src
-    assert "sid.startsWith('cron_')" in src
+    assert "sid.startsWith('cron_')" not in src
     assert "sid.startsWith('cron-')" not in src
 
 
@@ -595,7 +597,7 @@ def test_forkFromMessage_rejects_read_only_non_cron_sessions_without_loading_or_
 def test_forkFromMessage_allows_read_only_cron_sessions_to_post():
     """Read-only cron message forks should reach the existing keep_count path."""
     result = _commands_harness(
-        "S.session = { session_id: 'cron_1', read_only: true };\n"
+        "S.session = { session_id: 'cron_1', raw_source: 'cron', read_only: true };\n"
         "_oldestIdx = 2;\n"
         "await forkFromMessage(4);\n"
         "console.log(JSON.stringify({ calls, toasts, ensureCalls, loadedSessions, renderCalls }));"
@@ -611,15 +613,15 @@ def test_forkFromMessage_allows_read_only_cron_sessions_to_post():
     assert payload["renderCalls"] == 1, "cron forkFromMessage should refresh the session list"
 
 
-def test_cmdBranch_rejects_non_canonical_cron_dash_id_without_posting():
-    """Only canonical cron source fields or cron_ ids should unlock read-only branching."""
+def test_cmdBranch_rejects_cron_prefixed_id_without_canonical_source():
+    """Only canonical cron source fields should unlock read-only branching."""
     result = _commands_harness(
-        "S.session = { session_id: 'cron-1', session_source: 'other', read_only: true };\n"
+        "S.session = { session_id: 'cron_spoof_messaging', session_source: 'other', read_only: true };\n"
         "await cmdBranch('');\n"
         "console.log(JSON.stringify({ calls, toasts, ensureCalls, loadedSessions, renderCalls }));"
     )
     payload = json.loads(result)
-    assert payload["calls"] == [], "cron- id alone should not unlock read-only /branch"
+    assert payload["calls"] == [], "cron_ id alone should not unlock read-only /branch"
     assert payload["toasts"][0][0] == "Read-only sessions cannot be forked."
 
 

@@ -2012,11 +2012,8 @@ function _isBranchableReadOnlySession(session) {
     session && session.source_tag,
     session && session.raw_source,
     session && session.source,
-    session && session.session_source,
-    session && session.source_label,
   ].map(v => String(v || '').trim().toLowerCase());
-  const sid = String(session && session.session_id || '').toLowerCase();
-  return sources.includes('cron') || sid.startsWith('cron_');
+  return sources.includes('cron');
 }
 
 function _sourceKeyForSession(session) {

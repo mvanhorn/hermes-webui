@@ -7535,7 +7535,8 @@ def _load_branch_source_or_refuse(handler, sid: str):
         return get_session(sid)
     except KeyError:
         _foreign_session, _reason = _claim_or_synthesize_cli_session(sid)
-        if _reason == "not_claimable" and _foreign_session is not None and is_cron_session(getattr(_foreign_session, "session_id", ""), str((getattr(_foreign_session, "source_tag", None) or getattr(_foreign_session, "raw_source", None) or getattr(_foreign_session, "source", None) or "")).strip().lower()):
+        _source_kind = str((getattr(_foreign_session, "source_tag", None) or getattr(_foreign_session, "raw_source", None) or getattr(_foreign_session, "source", None) or "")).strip().lower() if _foreign_session is not None else ""
+        if _reason == "not_claimable" and _foreign_session is not None and _source_kind == "cron":
             _foreign_session._branch_source_readonly = True; return _foreign_session
         if _reason == "not_claimable": bad(handler, "Read-only sessions cannot be branched from WebUI", 403); return None
         bad(handler, "Session not found", 404)

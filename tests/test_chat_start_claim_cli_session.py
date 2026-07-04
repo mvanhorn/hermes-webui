@@ -1101,6 +1101,34 @@ def test_branch_still_refuses_non_cron_not_claimable_sources(
     assert not (isolated_state_db["sessions_dir"] / f"{SID}.json").exists()
 
 
+def test_branch_refuses_cron_prefixed_non_cron_not_claimable_source(
+    routes_module, monkeypatch, isolated_state_db
+):
+    SID = "cron_spoof_messaging"
+    _make_state_db(
+        isolated_state_db["db"], SID, message_count=1,
+        title="Messaging chat", source="messaging", cwd="/root",
+    )
+    monkeypatch.setattr(
+        routes_module,
+        "_lookup_cli_session_metadata",
+        lambda _sid: {
+            "session_id": SID,
+            "source_tag": "messaging",
+            "raw_source": "messaging",
+            "session_source": "other",
+        },
+    )
+    monkeypatch.setattr(routes_module, "_check_csrf", lambda _handler: True)
+    monkeypatch.setattr(routes_module, "_guard_request_session_visibility", lambda *args, **kwargs: True)
+    handler = _FakePostHandler({"session_id": SID}, path="/api/session/branch")
+    routes_module.handle_post(handler, SimpleNamespace(path="/api/session/branch", query=""))
+    assert handler.status == 403
+    payload = _response_json(handler)
+    assert "read-only" in payload["error"].lower()
+    assert not (isolated_state_db["sessions_dir"] / f"{SID}.json").exists()
+
+
 def test_branch_from_claimable_tui_still_creates_fork(
     routes_module, monkeypatch, isolated_state_db
 ):
