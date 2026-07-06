@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **Documented the reverse-proxy basic-auth caveat for installed PWAs.** README, onboarding, and troubleshooting now explain that proxy basic auth can block the same-origin service-worker/shell update fetches an installed PWA needs (leaving it on a blank screen after an update), and give recovery steps — prefer WebUI's built-in password, or scope proxy auth so `sw.js`/manifest/shell requests complete. Thanks @rodboev. (#5673, #2781)
+
 ### Internal
 
 - **Shared layout-assertion helpers for browser tests.** Added `tests/_layout_helpers.py` (a reusable Playwright layout-lint: overlap / clipping / container-escape / degenerate-box / raw-i18n-key / a11y checks) plus its own coverage, so future per-issue browser tests can assert real rendered geometry without reimplementing the checks each time. Test-only; no production code changes. Thanks @rodboev. (#5668, #5665)
