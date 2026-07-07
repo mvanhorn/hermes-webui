@@ -239,14 +239,17 @@ def test_process_wakeup_pause_resets_when_model_provider_lane_changes(tmp_path, 
     assert saved.process_wakeup_pause == {}
 
 
-def test_success_path_clears_process_wakeup_pause_after_post_save_cancel_check():
+def test_success_path_clears_process_wakeup_pause_after_late_cancel_checks():
     src = Path(__file__).parent.parent.joinpath("api", "streaming.py").read_text(encoding="utf-8")
     session_save_idx = src.index('with _stream_writeback_stage(_writeback_timings, "session_save")')
     post_save_cancel_idx = src.index("if cancel_event.is_set():", session_save_idx)
+    state_sync_idx = src.index('with _stream_writeback_stage(_writeback_timings, "state_sync")')
+    final_cancel_idx = src.index("if cancel_event.is_set():", state_sync_idx)
     pause_clear_idx = src.index("clear_process_wakeup_pause(s, reason='run_completed')")
     done_payload_idx = src.index('with _stream_writeback_stage(_writeback_timings, "done_payload")')
 
-    assert session_save_idx < post_save_cancel_idx < pause_clear_idx < done_payload_idx
+    assert session_save_idx < post_save_cancel_idx < state_sync_idx
+    assert state_sync_idx < final_cancel_idx < pause_clear_idx < done_payload_idx
 
 
 def test_process_wakeup_pause_does_not_suppress_explicit_non_wakeup_turn(tmp_path, monkeypatch):

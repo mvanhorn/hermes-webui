@@ -9294,6 +9294,25 @@ def _run_agent_streaming(
                         )
                 except Exception:
                     logger.debug("Failed to sync session to insights")
+            # A late cancel can land during memory/state-sync writeback. Do not
+            # clear a credential-exhausted process-wakeup pause unless this run
+            # is still settling as a normal completion.
+            if cancel_event.is_set():
+                _finalize_cancelled_turn(s, ephemeral=False)
+                try:
+                    append_turn_journal_event_for_stream(
+                        s.session_id,
+                        stream_id,
+                        {
+                            "event": "interrupted",
+                            "created_at": time.time(),
+                            "reason": "cancelled",
+                        },
+                    )
+                except Exception:
+                    logger.debug("Failed to append cancelled turn journal event", exc_info=True)
+                put('cancel', _cancel_event_payload('Cancelled by user'))
+                return
             if clear_process_wakeup_pause(s, reason='run_completed'):
                 with _stream_writeback_stage(_writeback_timings, "process_wakeup_pause_clear_save"):
                     s.save(touch_updated_at=False)
