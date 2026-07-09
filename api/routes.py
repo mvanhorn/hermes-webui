@@ -6262,6 +6262,15 @@ def _read_profile_model_config(
     does not override the session provider. ``profile_default_model`` is still
     returned for suffix repair (#5127) only when the profile's configured
     provider matches ``requested_provider`` after normalization.
+
+    perf(webui/session-load-latency) tier2a: the parse is wrapped in a
+    per-process LRU keyed by (profile_name, config_mtime, size). The
+    function fires on every chat-open for sessions under a named
+    profile (resolve_model=1 path), and the YAML parse alone is
+    hundreds of µs to single-digit ms on the Chromebook. Cache TTL
+    60s is a backstop in case mtime resolution is poor on a given
+    filesystem; under normal edits the mtime changes and invalidates
+    immediately.
     """
     if not getattr(session, "profile", None):
         return None, None, None
@@ -6269,15 +6278,13 @@ def _read_profile_model_config(
     try:
         from api.profiles import get_hermes_home_for_profile
 
-        _profile_home = get_hermes_home_for_profile(session.profile)
+        _profile_name = str(session.profile or "")
+        _profile_home = get_hermes_home_for_profile(_profile_name)
         _profile_cfg_path = os.path.join(str(_profile_home), "config.yaml")
         if not os.path.isfile(_profile_cfg_path):
             return None, None, None
-        import yaml
-
-        with open(_profile_cfg_path, encoding="utf-8") as _f:
-            _pcfg = yaml.safe_load(_f) or {}
-        if not isinstance(_pcfg, dict):
+        _pcfg = _read_profile_config_cached(_profile_name, _profile_cfg_path)
+        if _pcfg is None:
             return None, None, None
         _model_cfg = _pcfg.get("model") or {}
         if not isinstance(_model_cfg, dict):
@@ -6299,6 +6306,89 @@ def _read_profile_model_config(
             return None, None, _pcfg
         return None, _default, _pcfg
     return _provider, _default, _pcfg
+
+
+# perf(webui/session-load-latency) tier2a: process-wide cache for parsed
+# profile config.yaml. Key = (profile_name, inode, mtime, size); value = parsed
+# dict. inode tracks atomic-rename edits (most editors replace files, giving a
+# new inode on Linux). mtime+size auto-invalidates on in-place edits; a 60s TTL
+# is the backstop in case of coarse mtime resolution (some network filesystems
+# round mtime to whole seconds — the size guard catches a write of equal-length
+# bytes within the same second). On cache hit, a full-content comparison catches
+# any in-place rewrite that inode+mtime+size missed (Greptile P1, PR#5803
+# discussion_r3548477915). Reading and comparing the full file content (~1-10KB)
+# is much cheaper than yaml.safe_load(). Reads are guarded by a single Lock to
+# keep the hot path simple; the underlying yaml.safe_load is the slow step, not
+# the lock, so contention is bounded.
+_PROFILE_CONFIG_CACHE: "dict[tuple, tuple[float, str, dict]]" = {}
+_PROFILE_CONFIG_CACHE_TTL_SECONDS = 60.0
+_PROFILE_CONFIG_CACHE_LOCK = threading.Lock()
+
+
+def _read_profile_config_cached(profile_name: str, cfg_path: str) -> dict | None:
+    """Return parsed profile config, caching by (inode, mtime, size) with
+    TTL backstop and full-content verification.
+
+    The full-content comparison reads the current file and compares it to a
+    copy stored in the cache entry. This catches any in-place rewrite where
+    inode+mtime+size are identical, regardless of where in the file the change
+    occurs — unlike a fixed-length prefix comparison, edits to fields after the
+    first N characters are always detected. Reading and comparing the full file
+    content (~1-10KB for a typical config.yaml) is much cheaper than
+    yaml.safe_load().
+
+    NOTE: The cache key uses inode+mtime+size to handle the common cases
+    (atomic-rename editors -> new inode; in-place editors -> mtime/size
+    change). The full-content comparison is a backstop for the rare case where
+    all three collide (e.g., sed -i on a filesystem with coarse mtime
+    resolution, writing the same byte count).
+    """
+    try:
+        st = os.stat(cfg_path)
+    except OSError:
+        return None
+    mtime = float(getattr(st, "st_mtime", 0.0) or 0.0)
+    size = int(getattr(st, "st_size", 0) or 0)
+    inode = int(getattr(st, "st_ino", 0) or 0)
+    key = (str(profile_name or ""), inode, mtime, size)
+    now = time.monotonic()
+    with _PROFILE_CONFIG_CACHE_LOCK:
+        cached = _PROFILE_CONFIG_CACHE.get(key)
+        if cached is not None:
+            cached_at, cached_content, cached_dict = cached
+            if (now - cached_at) <= _PROFILE_CONFIG_CACHE_TTL_SECONDS:
+                # Full content comparison catches any in-place rewrite where
+                # inode+mtime+size are identical but the file content changed.
+                # Reading and comparing the full file (~1-10KB) is cheaper than
+                # yaml.safe_load(). Unlike a fixed-length prefix, this detects
+                # edits anywhere in the file. Greptile P1 (PR#5803).
+                _current_content = None
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as _f:
+                        _current_content = _f.read()
+                except Exception:
+                    pass
+                if _current_content == cached_content:
+                    return cached_dict
+                # Content changed while key collided — fall through to re-parse
+    import yaml
+    try:
+        with open(cfg_path, encoding="utf-8") as _f:
+            content = _f.read()
+            parsed = yaml.safe_load(content) or {}
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    with _PROFILE_CONFIG_CACHE_LOCK:
+        _PROFILE_CONFIG_CACHE[key] = (now, content, parsed)
+        # Cap the cache at 32 entries; profiles are bounded in practice
+        # and unbounded growth would be a leak.
+        if len(_PROFILE_CONFIG_CACHE) > 32:
+            # Drop the oldest entry by insertion order (dict is ordered).
+            for old_key in list(_PROFILE_CONFIG_CACHE.keys())[:max(0, len(_PROFILE_CONFIG_CACHE) - 32)]:
+                _PROFILE_CONFIG_CACHE.pop(old_key, None)
+    return parsed
 
 
 def _load_profile_config_dict(session) -> dict | None:
@@ -11506,7 +11596,7 @@ def handle_get(handler, parsed) -> bool:
         # which the request-thread wrapper could not reach. See
         # api.config.get_available_models cold path + profile_scope_for_detached_worker.
         freshness = parse_qs(parsed.query or "").get("freshness", [""])[0].strip().lower()
-        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger)
+        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger, print_fn=getattr(handler, '_safe_webui_print', None))
         try:
             diag.stage(f"enter:freshness={freshness or 'default'}") if diag else None
             if freshness == "session_visit":
@@ -11710,9 +11800,22 @@ def handle_get(handler, parsed) -> bool:
         import time as _time
         _t0 = _time.monotonic()
         _debug_slow = os.environ.get("HERMES_DEBUG_SLOW", "")
+        # perf(webui/session-load-latency) tier2c: per-stage breakdown via
+        # RequestDiagnostics. maybe_start() returns None for paths not in
+        # the allowlist, in which case the existing _tN-driven [SLOW] log
+        # is the only signal — same as before.
+        _diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger, print_fn=getattr(handler, '_safe_webui_print', None))
+        # perf(webui/session-load-latency) tier2c-followup: every early-return
+        # in this handler calls `_diag.finish()` before returning so the
+        # watchdog's _watchdog_pending dict stays bounded to in-flight requests.
+        # Greptile flagged this in PR review — finish() unregisters the
+        # pending watchdog entry; without it the entry stays for the full
+        # 5s slow-request timeout and emits a spurious "Slow WebUI request
+        # still running" log. Idempotent — finish() no-ops if already called.
         query = parse_qs(parsed.query)
         sid = query.get("session_id", [""])[0]
         if not sid:
+            if _diag: _diag.finish()
             return j(handler, {"error": "session_id is required"}, status=400)
         # ?messages=0 skips the message payload for fast session switching.
         # The frontend uses this when switching conversations in the sidebar
@@ -11745,12 +11848,14 @@ def handle_get(handler, parsed) -> bool:
         expand_renderable = str(_expand_renderable).strip() in ("1", "true", "True")
         try:
             _t1 = _time.monotonic()
+            if _diag: _diag.stage("t1_after_get_session_check")
             s = get_session(sid, metadata_only=(not load_messages))
             _session_profile = getattr(s, 'profile', None) or None
             if not _session_visible_to_active_profile(_session_profile, handler):
                 if _session_profile:
                     # Valid session owned by a KNOWN other profile: 409 so the
                     # client can offer to switch to it (#5419).
+                    if _diag: _diag.finish()
                     return j(handler, {
                         "error": "Session belongs to a different profile",
                         "code": "session_profile_mismatch",
@@ -11762,6 +11867,7 @@ def handle_get(handler, parsed) -> bool:
                 # fires. _profiles_match coerces None->'default', so a truly
                 # missing/legacy session under a non-default active profile would
                 # otherwise emit a useless 409 with profile=null.
+                if _diag: _diag.finish()
                 return bad(handler, "Session not found", 404)
             original_stream_id = getattr(s, "active_stream_id", None)
             _clear_stale_stream_state(s)
@@ -11799,6 +11905,7 @@ def handle_get(handler, parsed) -> bool:
                 # honor #2827's TLS-vs-thread fix.
                 metadata_summary = _metadata_only_message_summary(sid, profile=_session_profile)
             _t2 = _time.monotonic()
+            if _diag: _diag.stage("t2_after_state_db_load")
             effective_model = (
                 _resolve_effective_session_model_for_display(s)
                 if resolve_model
@@ -11810,6 +11917,7 @@ def handle_get(handler, parsed) -> bool:
                 else None
             )
             _t3 = _time.monotonic()
+            if _diag: _diag.stage("t3_after_model_resolve")
             if load_messages:
                 if is_messaging_session and cli_messages:
                     # Recovery/aggregate sidecars can intentionally contain a
@@ -12052,6 +12160,7 @@ def handle_get(handler, parsed) -> bool:
             raw["_messages_truncated"] = _truncated
             raw["_messages_offset"] = _messages_offset
             _t4 = _time.monotonic()
+            if _diag: _diag.stage("t4_after_compact_and_merge")
             if effective_model:
                 raw["model"] = effective_model
             if effective_provider:
@@ -12067,22 +12176,42 @@ def handle_get(handler, parsed) -> bool:
                 raw["read_only"] = True
             redact = redact_session_data(raw)
             _t5 = _time.monotonic()
+            if _diag: _diag.stage("t5_after_redact")
             resp = j(handler, {"session": redact})
             _t6 = _time.monotonic()
+            if _diag: _diag.stage("t6_after_json_write")
             _total_ms = (_t6 - _t0) * 1000
             # Always log when slow (>2s) so we don't need HERMES_DEBUG_SLOW env var
             # to diagnose latency regressions. Opt-in env var still forces
             # logging on every request for development.
             if _debug_slow or _total_ms >= 2000:
-                logger.warning(
+                # perf(webui/session-load-latency) tier2c: route the [SLOW] line
+                # through handler._safe_webui_print() rather than logger.warning().
+                # The WebUI process starts the root logger without any handler, so
+                # logger.warning() calls are silently dropped (the [SLOW] line
+                # previously worked only on PIDs that happened to have a logger
+                # handler set up by an earlier run; today the line is invisible).
+                # _safe_webui_print writes to the systemd journal socket directly,
+                # same as the per-request ms line — which is why THAT line keeps
+                # working.
+                handler._safe_webui_print(
                     "[SLOW] session_id=%s get_session=%.1fms model_resolve=%.1fms "
-                    "compact=%.1fms redact=%.1fms json_write=%.1fms total=%.1fms",
-                    sid,
-                    (_t2-_t1)*1000, (_t3-_t2)*1000, (_t4-_t3)*1000,
-                    (_t5-_t4)*1000, (_t6-_t5)*1000, _total_ms,
+                    "compact=%.1fms redact=%.1fms json_write=%.1fms total=%.1fms" % (
+                        sid,
+                        (_t2-_t1)*1000, (_t3-_t2)*1000, (_t4-_t3)*1000,
+                        (_t5-_t4)*1000, (_t6-_t5)*1000, _total_ms,
+                    )
                 )
+            if _diag: _diag.finish()
             return resp
         except KeyError:
+            # perf(webui/session-load-latency) tier2c-followup: fire
+            # _diag.finish() in the exception branch too. Greptile flagged
+            # this in PR review — finish() unregisters the pending watchdog
+            # entry; without it the entry stays for the full 5s slow-request
+            # timeout and emits a spurious "Slow WebUI request still
+            # running" log. Idempotent — finish() no-ops if already called.
+            if _diag: _diag.finish()
             # No WebUI sidecar. Delegate to the shared foreign-session
             # synthesizer so GET and POST have symmetric writeable/read-only
             # behaviour for CLI/TUI/Desktop sessions. The helper enforces the
@@ -12214,7 +12343,7 @@ def handle_get(handler, parsed) -> bool:
         return j(handler, {"results": get_results(sid)})
 
     if parsed.path == "/api/sessions":
-        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger)
+        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger, print_fn=getattr(handler, '_safe_webui_print', None))
         try:
             from api import profiles as profiles_api
 
@@ -12713,7 +12842,7 @@ def handle_get(handler, parsed) -> bool:
     # ── Profile API (GET) ──
     if parsed.path == "/api/profiles":
         from api import profiles as profiles_api
-        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger)
+        diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger, print_fn=getattr(handler, '_safe_webui_print', None))
         try:
             diag.stage("list_profiles_api") if diag else None
             profiles_payload = profiles_api.list_profiles_api()
@@ -12969,7 +13098,7 @@ def _validate_session_toolsets_shape(toolsets):
 
 def handle_post(handler, parsed) -> bool:
     """Handle all POST routes. Returns True if handled, False for 404."""
-    diag = RequestDiagnostics.maybe_start("POST", parsed.path, logger=logger)
+    diag = RequestDiagnostics.maybe_start("POST", parsed.path, logger=logger, print_fn=getattr(handler, '_safe_webui_print', None))
     if parsed.path == "/api/csp-report":
         if diag:
             diag.stage("csp_report")
@@ -13650,6 +13779,13 @@ def handle_post(handler, parsed) -> bool:
         # GET ?session_id=X  → return current draft
         # POST body          → save draft { session_id, text?, files? }
         # HTTP method is in handler.command (e.g. "POST", "GET"), parsed has no .method
+        import time as _draft_time
+        _draft_t0 = _draft_time.monotonic()
+        _draft_stages = []
+
+        def _draft_mark(name):
+            _draft_stages.append((name, _draft_time.monotonic()))
+        _draft_mark("enter")
         if handler.command == "GET":
             query = parse_qs(parsed.query)
             sid = query.get("session_id", [""])[0] if parsed.query else ""
@@ -13689,8 +13825,10 @@ def handle_post(handler, parsed) -> bool:
             s = get_session(sid)
         except KeyError:
             return bad(handler, "Session not found", 404)
+        _draft_mark("after_get_session")
         unchanged = False
         with _get_session_agent_lock(sid):
+            _draft_mark("acquired_lock")
             current_draft = dict(getattr(s, "composer_draft", {}) or {})
             next_draft = dict(current_draft)
             if text is not None:
@@ -13706,12 +13844,29 @@ def handle_post(handler, parsed) -> bool:
                 # here makes the active-session external-refresh poll force-reload the
                 # current chat every few seconds while the user is typing, and that
                 # delayed reload can restore an older draft over newer local input.
+                _draft_mark("before_save")
                 s.save(touch_updated_at=False, skip_index=True)
+                _draft_mark("after_save")
                 saved_draft = s.composer_draft
+        _draft_mark("released_lock")
         payload = {"ok": True, "draft": saved_draft}
         if unchanged:
             payload["unchanged"] = True
+        _draft_mark("before_json")
         j(handler, payload)
+        _draft_mark("after_json")
+        _draft_stages.append(("end", _draft_time.monotonic()))
+        if _draft_stages[-1][1] - _draft_t0 > 0.2:
+            parts = " ".join(
+                f"{n}={((t - prev[1]) * 1000):.1f}ms"
+                for (n, t), prev in zip(_draft_stages[1:], _draft_stages[:-1], strict=True)
+            )
+            handler._safe_webui_print(
+                "[SLOW] /api/session/draft total=%.1fms stages: %s" % (
+                    (_draft_stages[-1][1] - _draft_t0) * 1000,
+                    parts,
+                )
+            )
         return True
 
     if parsed.path == "/api/session/update":

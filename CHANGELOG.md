@@ -9,6 +9,8 @@
 
 ### Fixed
 
+- **Session loading is faster — addresses the "WebUI feels laggy" reports.** The session-load path (`/api/sessions` + session-by-id) had redundant full-metadata reads on every request; it now uses a profile-scoped, content-verified, lock-guarded cache (capped at 32 entries) with a fast path that only serves cached data when disk state is provably fresh, falling back to full comparison otherwise. Response shape and profile-scoping are unchanged. Thanks @Kopamed. (#5803, #5455)
+
 - **The background-wakeup status-row label is now localized.** The "Background wakeup" label introduced with the wakeup status row (#5766) was hardcoded English; it now resolves through `t('process_wakeup_label')`, with translations in all 15 locales. Thanks @Isla-Liu. (#5768)
 
 - **Concurrent remote-gateway health checks no longer stampede the gateway.** When many requests needed a remote-gateway health probe at once, each fired its own probe (a thundering herd). Probes are now single-flighted: one "leader" thread probes while latecomers wait (bounded) and share the result, guarded by a single condition/lock with a `finally` that always releases waiters even if the probe errors. Thanks @ai-ag2026. (#5798, #5455)
