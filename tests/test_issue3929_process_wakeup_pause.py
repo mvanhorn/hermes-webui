@@ -1239,7 +1239,7 @@ def test_process_wakeup_pause_records_unset_route_provider_before_runtime_backfi
     assert saved_after.process_wakeup_pause["suppressed_count"] == 1
 
 
-def test_process_wakeup_pause_empty_provider_lane_probes_after_fingerprint_change(tmp_path, monkeypatch):
+def test_process_wakeup_pause_keeps_empty_provider_lane_after_fingerprint_change(tmp_path, monkeypatch):
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
     auth_json = hermes_home / "auth.json"
@@ -1268,15 +1268,11 @@ def test_process_wakeup_pause_empty_provider_lane_probes_after_fingerprint_chang
         '{"credential_pool": {"test-provider": [{"id": "refilled-token"}]}}\n',
         encoding="utf-8",
     )
-    assert models.process_wakeup_credential_state_fingerprint(session) != paused_fingerprint
+    changed_fingerprint = models.process_wakeup_credential_state_fingerprint(session)
+    assert changed_fingerprint != paused_fingerprint
 
-    captured = {}
-
-    def _fake_start_run(s, **kwargs):
-        captured["source"] = kwargs.get("source")
-        captured["model"] = kwargs.get("model")
-        captured["model_provider"] = kwargs.get("model_provider")
-        return {"stream_id": "stream-empty-provider-probe", "session_id": s.session_id, "_status": 200}
+    def _unexpected_start_run(*_args, **_kwargs):
+        raise AssertionError("empty-provider lane must prove recovery before restarting")
 
     _patch_process_wakeup_route(
         monkeypatch,
@@ -1289,7 +1285,7 @@ def test_process_wakeup_pause_empty_provider_lane_probes_after_fingerprint_chang
         "provider_has_process_wakeup_recovery_credential",
         lambda *_args, **_kwargs: False,
     )
-    monkeypatch.setattr(routes, "_start_run", _fake_start_run)
+    monkeypatch.setattr(routes, "_start_run", _unexpected_start_run)
 
     response = routes.start_session_turn(
         session.session_id,
@@ -1297,16 +1293,12 @@ def test_process_wakeup_pause_empty_provider_lane_probes_after_fingerprint_chang
         source="process_wakeup",
     )
 
-    assert response["_status"] == 200
-    assert response["stream_id"] == "stream-empty-provider-probe"
-    assert captured == {
-        "source": "process_wakeup",
-        "model": "claude-sonnet-test",
-        "model_provider": None,
-    }
+    assert response["_status"] == 409
+    assert response["error"] == PROCESS_WAKEUP_PAUSE_ERROR
     saved = Session.load(session.session_id)
     assert saved is not None
-    assert saved.process_wakeup_pause == {}
+    assert saved.process_wakeup_pause["suppressed_count"] == 1
+    assert saved.process_wakeup_pause["credential_state_fingerprint"] == changed_fingerprint
 
 
 def test_gateway_cancel_during_completion_save_restores_process_wakeup_pause(tmp_path, monkeypatch):

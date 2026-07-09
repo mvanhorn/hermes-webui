@@ -20042,11 +20042,7 @@ def start_session_turn(
                     session_id,
                     exc_info=True,
                 )
-            _allow_empty_provider_probe = (
-                _credential_state_changed
-                and not _credential_revalidation_provider
-            )
-            if _credential_recovered or _allow_empty_provider_probe:
+            if _credential_recovered:
                 _recovery_reason = (
                     'credential_state_changed'
                     if _credential_state_changed
