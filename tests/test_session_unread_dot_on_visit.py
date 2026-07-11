@@ -28,7 +28,6 @@ Two invariants flagged in review are protected here and MUST NOT regress:
       unread authoritatively rather than doing ad-hoc DOM surgery (concern b).
 """
 import json
-import re
 import subprocess
 from pathlib import Path
 
