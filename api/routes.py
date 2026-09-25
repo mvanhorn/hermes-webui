@@ -23427,7 +23427,96 @@ def _prepare_chat_start_session_for_stream(
         s.save()
 
 
-def _cleanup_chat_start_launch_failure(session, stream_id: str) -> None:
+_HANDOFF_GOAL = "goal"
+_HANDOFF_BG = "bg"
+
+
+def _classify_pending_handoff_markers(
+    session_id: str, *, goal_related: bool
+) -> tuple[bool, tuple[str, ...]]:
+    """Decide which in-memory handoff markers this attempt would consume.
+
+    ``PENDING_GOAL_CONTINUATION`` and ``PENDING_BG_TASK_COMPLETIONS`` are
+    pending handoff metadata, not durable Agent goal state. Explicit
+    ``goal_related=True`` (the /goal kickoff) stays goal-related and does not
+    claim the goal marker. This function does not mutate the sets.
+    """
+    claimed: list[str] = []
+    if not goal_related and session_id in PENDING_GOAL_CONTINUATION:
+        goal_related = True
+        claimed.append(_HANDOFF_GOAL)
+    if session_id in PENDING_BG_TASK_COMPLETIONS:
+        claimed.append(_HANDOFF_BG)
+    return goal_related, tuple(claimed)
+
+
+def _consume_claimed_handoff_markers(session_id: str, claimed) -> None:
+    if _HANDOFF_GOAL in claimed:
+        PENDING_GOAL_CONTINUATION.discard(session_id)
+    if _HANDOFF_BG in claimed:
+        PENDING_BG_TASK_COMPLETIONS.discard(session_id)
+
+
+def _restore_claimed_handoff_markers(session_id: str, claimed) -> None:
+    if _HANDOFF_GOAL in claimed:
+        PENDING_GOAL_CONTINUATION.add(session_id)
+    if _HANDOFF_BG in claimed:
+        PENDING_BG_TASK_COMPLETIONS.add(session_id)
+
+
+def _admit_pending_handoff_markers(
+    session_id: str, *, goal_related: bool
+) -> tuple[bool, tuple[str, ...]]:
+    """Consume handoff markers for an attempt that has passed admission."""
+    goal_related, claimed = _classify_pending_handoff_markers(
+        session_id, goal_related=goal_related
+    )
+    _consume_claimed_handoff_markers(session_id, claimed)
+    return goal_related, claimed
+
+
+def _restore_consumed_handoff_if_still_owned(
+    session,
+    stream_id: str,
+    claimed,
+    *,
+    lock_held: bool,
+) -> None:
+    """Restore markers this attempt consumed when it still owns the session.
+
+    ``lock_held`` must be true when the caller already holds the non-reentrant
+    per-session lock (regeneration cleanup). A missing canonical session or a
+    successor ``active_stream_id`` leaves the markers untouched.
+    """
+    if not claimed:
+        return
+
+    def _restore_locked() -> None:
+        try:
+            canonical = get_session(session.session_id)
+        except KeyError:
+            return
+        if getattr(canonical, "active_stream_id", None) != stream_id:
+            return
+        _restore_claimed_handoff_markers(canonical.session_id, claimed)
+
+    try:
+        if lock_held:
+            _restore_locked()
+            return
+        with _get_session_agent_lock(session.session_id):
+            _restore_locked()
+    except Exception:
+        logger.debug(
+            "Failed to restore pending handoff markers after launch failure for %s",
+            stream_id,
+            exc_info=True,
+        )
+
+
+def _cleanup_chat_start_launch_failure(
+    session, stream_id: str, consumed_markers: tuple[str, ...] = ()
+) -> None:
     """Release state registered before a worker thread successfully starts."""
     clear_session_writeback_owner_if_owned(session.session_id, stream_id)
     unregister_stream_owner(stream_id)
@@ -23454,6 +23543,10 @@ def _cleanup_chat_start_launch_failure(session, stream_id: str) -> None:
                 return  # session deleted while the thread launch was failing
             if getattr(canonical, "active_stream_id", None) != stream_id:
                 return  # a successor turn already owns the session
+            # This failed launch still owns the session, so put back only the
+            # handoff markers it consumed. Successor pending fields and a
+            # deleted session are handled by the returns above.
+            _restore_claimed_handoff_markers(canonical.session_id, consumed_markers)
             canonical.active_stream_id = None
             canonical.pending_user_message = None
             canonical.pending_attachments = []
@@ -23567,6 +23660,8 @@ def _start_regeneration_stream_locked(
     release_worker = threading.Event()
     abort_worker = threading.Event()
     worker_thread = None
+    claimed_markers: tuple[str, ...] = ()
+    markers_consumed = False
 
     worker_target = (
         _run_gateway_chat_streaming if backend_is_gateway else _run_agent_streaming
@@ -23647,6 +23742,13 @@ def _start_regeneration_stream_locked(
             retained_context_user=retained_context_user,
             defer_save=True,
         )
+        # Classify before the worker is built into the stream, but consume only
+        # once the regeneration is accepted. A rejection or earlier rollback
+        # leaves both handoff markers in place.
+        goal_related, claimed_markers = _classify_pending_handoff_markers(
+            s.session_id, goal_related=goal_related
+        )
+        worker_kwargs["goal_related"] = goal_related
 
         diag.stage("turn_journal_submitted") if diag else None
         from api.turn_journal import append_turn_journal_event
@@ -23685,6 +23787,10 @@ def _start_regeneration_stream_locked(
         save_attempted = True
         s.save()
         accepted = True
+        # Consume before the worker is released so a goal_continue emitted by
+        # this turn cannot be discarded as if it were the marker we claimed.
+        _consume_claimed_handoff_markers(s.session_id, claimed_markers)
+        markers_consumed = True
         set_last_workspace(workspace, profile=getattr(s, "profile", None))
         release_worker.set()
     except Exception as exc:
@@ -23697,6 +23803,14 @@ def _start_regeneration_stream_locked(
         ):
             worker_thread.join(timeout=1)
         _cleanup_owned_start()
+        if markers_consumed:
+            # Already holding the session lock; do not acquire it again.
+            _restore_consumed_handoff_if_still_owned(
+                s,
+                stream_id,
+                claimed_markers,
+                lock_held=True,
+            )
         if accepted:
             if journal_event:
                 try:
@@ -23920,21 +24034,11 @@ def _start_chat_stream_for_session(
         diag.stage("stale_stream_cleanup") if diag else None
         _clear_stale_stream_state(s)
 
-    # #1932: check if this session has a pending goal continuation flag.
-    # The streaming hook sets PENDING_GOAL_CONTINUATION when goal_continue fires,
-    # so the next chat/start for this session is automatically treated as goal-related.
-    if not goal_related and s.session_id in PENDING_GOAL_CONTINUATION:
-        goal_related = True
-        PENDING_GOAL_CONTINUATION.discard(s.session_id)
-
-    # process_complete wakeup (ours-original, Option B): if this session has a
-    # pending process_complete marker (set by api/background_process.py drain),
-    # discard it atomically here. Mirrors the goal_continue pattern (#1932).
-    # The marker is server-internal telemetry; the actual wakeup is delivered
-    # either server-side (Option Z) or via the PR #2279 next-turn drain.
-    if s.session_id in PENDING_BG_TASK_COMPLETIONS:
-        PENDING_BG_TASK_COMPLETIONS.discard(s.session_id)
-
+    # Goal and background handoff markers stay put until this attempt passes
+    # every lock-held rejection check and session preparation. A 409 here, or
+    # a preparation failure below, must not drop a continuation that a later
+    # admitted turn still needs. Refs #6885.
+    claimed_markers: tuple[str, ...] = ()
     session_lock = _get_session_agent_lock(s.session_id)
     diag.stage("session_lock_wait") if diag else None
     while True:
@@ -23985,6 +24089,9 @@ def _start_chat_stream_for_session(
                     model_provider=model_provider,
                     stream_id=stream_id,
                     source=source,
+                )
+                goal_related, claimed_markers = _admit_pending_handoff_markers(
+                    s.session_id, goal_related=goal_related
                 )
                 break
         if needs_stale_cleanup:
@@ -24058,7 +24165,9 @@ def _start_chat_stream_for_session(
                 _clear_gateway_run_starting(stream_id)
             except Exception:
                 logger.debug("Failed to record gateway run-start failure for stream %s", stream_id, exc_info=True)
-        _cleanup_chat_start_launch_failure(s, stream_id)
+        _cleanup_chat_start_launch_failure(
+            s, stream_id, consumed_markers=claimed_markers
+        )
         raise
     response = {
         "stream_id": stream_id,

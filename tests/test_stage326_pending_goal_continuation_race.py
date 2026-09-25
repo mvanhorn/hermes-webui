@@ -9,13 +9,16 @@ receive the SSE event, post the next /chat/start, and trigger the
 consumer-side `if session_id in PENDING_GOAL_CONTINUATION` check in
 routes.py.
 
-The fix removes the discard from streaming.py's finally and relies on the
-consumer in routes.py to discard atomically when the marker is read.
+The fix removes the discard from streaming.py's finally. routes.py consumes
+the marker when an attempt is actually admitted. Nearby set operations are not
+a compound transaction; observable admission behavior lives in
+tests/test_goal_continuation_admission.py.
 
-These tests exercise the full chain to guard against the regression:
+These tests guard the producer/finally half of the chain:
 1. The streaming finally must NOT discard the marker
-2. Setting the marker survives the streaming finally
-3. routes.py consumer discards atomically on read
+2. PENDING_GOAL_CONTINUATION stays a set
+3. STREAM_GOAL_RELATED cleanup is keyed by stream_id
+4. The marker is added before the goal_continue event is emitted
 """
 import re
 from pathlib import Path
@@ -23,10 +26,6 @@ from pathlib import Path
 
 def _read_streaming():
     return Path(__file__).parents[1].joinpath("api", "streaming.py").read_text(encoding="utf-8")
-
-
-def _read_routes():
-    return Path(__file__).parents[1].joinpath("api", "routes.py").read_text(encoding="utf-8")
 
 
 def test_streaming_finally_does_not_discard_pending_goal_continuation():
@@ -52,31 +51,6 @@ def test_streaming_finally_does_not_discard_pending_goal_continuation():
         "routes.py and breaks the goal-continuation chain. The discard "
         "must live ONLY in routes.py's `_start_chat_stream_for_session` "
         "consumer path."
-    )
-
-
-def test_routes_consumer_discards_atomically_on_read():
-    """The routes.py consumer must discard the marker after consuming it,
-    so the marker is single-use (one continuation = one auto-flag).
-    """
-    src = _read_routes()
-
-    # Find the consumption check.
-    m = re.search(
-        r"if not goal_related and s\.session_id in PENDING_GOAL_CONTINUATION:.*?PENDING_GOAL_CONTINUATION\.discard",
-        src,
-        re.DOTALL,
-    )
-    assert m is not None, (
-        "routes.py must consume PENDING_GOAL_CONTINUATION atomically: "
-        "check + set goal_related + discard in the same block"
-    )
-    # The discard must be within ~10 lines of the check (atomic block).
-    block = m.group(0)
-    line_count = block.count("\n")
-    assert line_count <= 10, (
-        f"PENDING_GOAL_CONTINUATION check + discard span {line_count} lines; "
-        "should be tight atomic block"
     )
 
 

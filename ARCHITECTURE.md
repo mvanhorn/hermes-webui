@@ -462,6 +462,31 @@ whose default `SessionDB()` path remains frozen at module import. Keep this fall
 compatibility-only: new goal semantics belong in Hermes Agent's native manager rather
 than a second WebUI implementation.
 
+`PENDING_GOAL_CONTINUATION` and `PENDING_BG_TASK_COMPLETIONS` are in-memory handoff
+markers for the next admitted turn. They are not authoritative Agent goal state and
+they do not survive a process restart. `_start_chat_stream_for_session` consumes them
+only after the per-session lock has cleared every rejection check — active stream,
+lifecycle-busy `ACTIVE_RUNS` (including a cancelling unwind), and stale-stream cleanup —
+and after session preparation succeeds. The admitted local or Gateway worker receives
+that goal classification through `goal_related` and `STREAM_GOAL_RELATED`. A rejected
+start or a preparation failure leaves both markers in place. Explicit `goal_related=True`
+from `/goal` kickoff stays goal-related and does not consume `PENDING_GOAL_CONTINUATION`.
+
+If `Thread.start()` fails, launch cleanup restores only the markers that attempt
+consumed, and only when `get_session` still returns a canonical session whose
+`active_stream_id` is the failed stream. A deleted session does not get the handoff
+back. A successor that already owns the session keeps its pending fields and markers.
+Regeneration follows the same rule at its acceptance boundary: a rejected or rolled-back
+regeneration does not consume markers, and an accepted regeneration classifies its
+worker once. Marker restore on a regeneration failure runs while the caller already
+holds the non-reentrant session lock.
+
+This boundary is the existing admission invariant (Refs #6885). It does not add a
+continuation scheduler, a durable intent registry, or automatic retries. Those later
+steps have to amend `docs/rfcs/hermes-run-adapter-contract.md` (Slice 3c scheduler
+prohibition) and `docs/rfcs/webui-run-state-consistency-contract.md` before they land.
+The lifecycle-busy admission check itself is unchanged.
+
 ### 4.9 Hermes Agent Moved-Name Compatibility
 
 Hermes Agent owns its module layout. Its September 2026 decomposition moved names the

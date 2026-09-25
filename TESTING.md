@@ -86,6 +86,29 @@ without ruff aren't blocked, while CI (which installs ruff) enforces it. The
 diff-scoped gate runs as the `lint` job in `.github/workflows/tests.yml` and is
 also part of the maintainer pre-release pre-gate.
 
+## Pending handoff admission
+
+`PENDING_GOAL_CONTINUATION` and `PENDING_BG_TASK_COMPLETIONS` are consumed only by
+the chat-start attempt that passes the per-session lock, the lifecycle-busy
+`ACTIVE_RUNS` guard, and session preparation. A 409, a preparation failure, or a
+rejected regeneration leaves both markers in place. `Thread.start()` failure
+restores only the markers that attempt consumed, and only while that stream still
+owns the canonical session. Explicit `/goal` kickoff stays `goal_related=True`
+without consuming the goal marker. This slice does not make continuation intent
+restart-durable and does not add a scheduler.
+
+```bash
+HERMES_HOME="$(mktemp -d)" HERMES_WEBUI_STATE_DIR="$(mktemp -d)" \
+  ./scripts/test.sh \
+  tests/test_goal_continuation_admission.py \
+  tests/test_stage326_pending_goal_continuation_race.py
+```
+
+`tests/test_stage326_pending_goal_continuation_race.py` still guards the streaming
+finally and the producer-before-event order. It does not treat nearby set
+operations as a compound atomic transaction; the admission file above is the
+observable regression.
+
 ## Automated browser smoke (runtime brick-class gate)
 
 The ESLint guard above catches `const`-reassign / import-assign statically. The
