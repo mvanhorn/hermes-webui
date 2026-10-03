@@ -94,10 +94,11 @@ def test_deliberate_new_chat_paths_do_not_pin_worktree():
     # Sidebar "New Chat" and command paths must NOT pass an explicit worktree
     # value — they inherit the server-side config default by design.
     boot = read("static/boot.js")
-    for line_no in (
-        i
-        for i, line in enumerate(boot.splitlines(), 1)
-        if "await newSession();await renderSessionList();closeMobileSidebar();" in line
-    ):
-        line = boot.splitlines()[line_no - 1]
+    lines = [
+        line
+        for line in boot.splitlines()
+        if "await newSession();closeMobileSidebar();" in line
+    ]
+    assert len(lines) == 2
+    for line in lines:
         assert "worktree" not in line
