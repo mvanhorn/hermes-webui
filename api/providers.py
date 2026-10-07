@@ -337,13 +337,16 @@ def _codex_snapshot_from_usage_payload(payload):
     if not isinstance(rate_limit, dict):
         rate_limit = {}
     windows = []
-    for key, label in (("primary_window", "Session"), ("secondary_window", "Weekly")):
+    for key, fallback in (("primary_window", "Session"), ("secondary_window", "Weekly")):
         window = rate_limit.get(key)
         if not isinstance(window, dict):
             continue
         used = _number(window.get("used_percent"))
         if used is None:
             continue
+        seconds = window.get("limit_window_seconds")
+        numeric = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+        label = {18000: "Session", 604800: "Weekly"}.get(seconds, fallback) if numeric else fallback
         windows.append(SimpleNamespace(
             label=label,
             used_percent=float(used),

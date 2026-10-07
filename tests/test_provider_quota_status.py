@@ -657,7 +657,7 @@ def test_codex_account_usage_subprocess_probes_pool_entries_concurrently(monkeyp
         (window["label"], window["limit_window_seconds"], window["credential_label"], window["remaining_percent"])
         for window in snapshot["pool"]["best_remaining_by_window"]
     ] == [
-        ("Session", 604_800, "Slow A", 20.0),
+        ("Weekly", 604_800, "Slow A", 20.0),
         ("Weekly", None, "Slow B", 70.0),
         ("Session", 18_000, "Slow B", 90.0),
     ]
@@ -823,8 +823,13 @@ def test_codex_singleton_duration_reaches_quota_payload_and_production_labels(mo
     def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
         windows = []
         rate_limit = provider_payload["rate_limit"]
-        for key, label in (("primary_window", "Session"), ("secondary_window", "Weekly")):
-            window = rate_limit[key]
+        for key, fallback in (("primary_window", "Session"), ("secondary_window", "Weekly")):
+            window = rate_limit.get(key)
+            if not isinstance(window, dict) or window.get("used_percent") is None:
+                continue
+            seconds = window.get("limit_window_seconds")
+            numeric = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+            label = {18000: "Session", 604800: "Weekly"}.get(int(seconds), fallback) if numeric else fallback
             windows.append(AccountUsageWindow(
                 label=label,
                 used_percent=float(window["used_percent"]),
@@ -873,10 +878,11 @@ def test_codex_singleton_duration_reaches_quota_payload_and_production_labels(mo
     monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(sys, "argv", ["quota-probe", "openai-codex", ""])
 
-    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+    worker = {"__name__": "__main__"}
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, worker)
 
     worker_payload = json.loads(capsys.readouterr().out.strip())
-    assert tuple(AccountUsageWindow.__dataclass_fields__) == ("label", "used_percent", "reset_at", "detail")
+    assert "limit_window_seconds" not in AccountUsageWindow.__dataclass_fields__
     assert len(parsed_snapshots) == 1
     assert [window["limit_window_seconds"] for window in worker_payload["windows"]] == [18_000, 604_800]
     assert len(seen_requests) == 1
@@ -885,6 +891,34 @@ def test_codex_singleton_duration_reaches_quota_payload_and_production_labels(mo
     assert request.headers["Authorization"] == "Bearer singleton-token"
     assert request.headers["Chatgpt-account-id"] == "acct-singleton"
     assert timeout == 4.0
+
+    def _joined(rate_limit):
+        provider_payload["rate_limit"] = rate_limit
+        raw = worker["_codex_snapshot_from_usage_payload"]({"rate_limit": rate_limit})
+        worker["_fetch_codex_singleton_snapshot"] = lambda *_a, **_k: raw
+        windows = worker["_codex_singleton_payload"](fake_fetch_account_usage("openai-codex"))["windows"]
+        return [(w["label"], w["used_percent"], w["limit_window_seconds"]) for w in windows]
+
+    primary = {"used_percent": 42, "reset_at": "2030-03-17T17:30:00Z", "limit_window_seconds": 604_800}
+    secondary = {"used_percent": 7, "reset_at": "2030-03-24T12:30:00Z", "limit_window_seconds": 18_000}
+    assert _joined({"primary_window": primary}) == [("Weekly", 42.0, 604_800)]
+    assert _joined({"primary_window": primary, "secondary_window": secondary}) == [
+        ("Weekly", 42.0, 604_800), ("Session", 7.0, 18_000),
+    ]
+
+    def _window(label, used, seconds):
+        return SimpleNamespace(label=label, used_percent=used, reset_at=None, detail=None, limit_window_seconds=seconds)
+
+    account_usage_mod.fetch_account_usage = lambda provider, **_k: SimpleNamespace(
+        provider=provider, source="usage_api", title="Account limits", plan=None, fetched_at=None,
+        available=True, details=(), unavailable_reason=None,
+        windows=(_window("Session", 15.0, 18_000), _window("Weekly", 40.0, 604_800)),
+    )
+    seen_requests.clear()
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+    skipped = json.loads(capsys.readouterr().out.strip())
+    assert seen_requests == [], "probe must be skipped when agent windows already carry durations"
+    assert [w["limit_window_seconds"] for w in skipped["windows"]] == [18_000, 604_800]
 
     monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
     monkeypatch.setattr(
