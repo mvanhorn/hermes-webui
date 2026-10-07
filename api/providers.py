@@ -346,7 +346,7 @@ def _codex_snapshot_from_usage_payload(payload):
             continue
         seconds = window.get("limit_window_seconds")
         numeric = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
-        label = {18000: "Session", 604800: "Weekly"}.get(seconds, fallback) if numeric else fallback
+        label = {18000: "Session", 604800: "Weekly"}.get(int(seconds), fallback) if numeric else fallback
         windows.append(SimpleNamespace(
             label=label,
             used_percent=float(used),
