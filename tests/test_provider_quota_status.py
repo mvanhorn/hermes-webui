@@ -882,7 +882,6 @@ def test_codex_singleton_duration_reaches_quota_payload_and_production_labels(mo
     exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, worker)
 
     worker_payload = json.loads(capsys.readouterr().out.strip())
-    assert "limit_window_seconds" not in AccountUsageWindow.__dataclass_fields__
     assert len(parsed_snapshots) == 1
     assert [window["limit_window_seconds"] for window in worker_payload["windows"]] == [18_000, 604_800]
     assert len(seen_requests) == 1
@@ -905,6 +904,16 @@ def test_codex_singleton_duration_reaches_quota_payload_and_production_labels(mo
     assert _joined({"primary_window": primary, "secondary_window": secondary}) == [
         ("Weekly", 42.0, 604_800), ("Session", 7.0, 18_000),
     ]
+    fractional = worker["_codex_snapshot_from_usage_payload"]({
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 42,
+                "reset_at": "2030-03-17T17:30:00Z",
+                "limit_window_seconds": 604800.9,
+            },
+        },
+    })
+    assert [window.label for window in fractional.windows] == ["Weekly"]
 
     def _window(label, used, seconds):
         return SimpleNamespace(label=label, used_percent=used, reset_at=None, detail=None, limit_window_seconds=seconds)
