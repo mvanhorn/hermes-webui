@@ -309,10 +309,14 @@ def _codex_usage_headers(access_token):
     }
     auth_claim = _jwt_claims(access_token).get("https://api.openai.com/auth")
     account_id = None
+    residency = None
     if isinstance(auth_claim, dict):
         account_id = auth_claim.get("chatgpt_account_id")
+        residency = auth_claim.get("chatgpt_data_residency") or auth_claim.get("chatgpt_compute_residency")
     if isinstance(account_id, str) and account_id.strip():
         headers["ChatGPT-Account-ID"] = account_id.strip()
+    if isinstance(residency, str) and residency.strip():
+        headers["x-openai-internal-codex-residency"] = residency.strip()
     return headers
 
 
