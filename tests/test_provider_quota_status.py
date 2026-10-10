@@ -1615,6 +1615,7 @@ def test_codex_quota_window_labels_use_duration_not_position():
         [{"provider": "openai-codex"}, {"label": "Session", "limit_window_seconds": 86_400}],
         [{"provider": "openai-codex"}, {"label": "Daily", "limit_window_seconds": 86_400}],
         [{"provider": "anthropic"}, {"label": "Session", "limit_window_seconds": 604_800}],
+        [{"provider": "openai-codex"}, {"label": "Session", "limit_window_seconds": 604800.9}],
     ]
     translations = {
         "provider_quota_session_limit": "5-hour limit",
@@ -1642,11 +1643,12 @@ process.stdout.write(JSON.stringify(cases.map(([limits, window]) =>
     assert json.loads(result.stdout) == [
         "5-hour limit",
         "Weekly limit",
-        "Usage limit",
+        "5-hour limit",
         "Usage limit",
         "Usage limit",
         "Daily",
         "Session",
+        "Weekly limit",
     ]
 
 
@@ -2259,3 +2261,92 @@ def test_codex_singleton_backfill_matches_windows_by_label_not_position(monkeypa
     assert [window["label"] for window in windows] == ["Weekly"]
     # A positional join would have written 18000 here, mislabeling Weekly as 5-hour.
     assert windows[0]["limit_window_seconds"] == 604_800
+
+
+def test_codex_singleton_raw_durations_survive_failed_probe(monkeypatch):
+    """Durations already on snapshot.raw survive a failed usage probe.
+
+    The installed Agent window has no duration field, but snapshot.raw is the
+    usage body. Once that backfill supplies every duration the probe must not
+    run; a 503 after a partial backfill must not clear the Weekly duration raw
+    already supported (Weekly limit / 5-hour limit).
+    """
+    import api.providers as providers
+
+    agent_pkg = types.ModuleType("agent")
+    account_usage_mod = types.ModuleType("agent.account_usage")
+    account_usage_mod.fetch_account_usage = lambda *_a, **_k: None
+    monkeypatch.setitem(sys.modules, "agent", agent_pkg)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+
+    source = providers._ACCOUNT_USAGE_SUBPROCESS_CODE
+    namespace = {"__name__": "__not_main__"}
+    exec(source.split("if len(sys.argv) > 1")[0], namespace)
+
+    probe_calls = []
+
+    def fail_probe(*_args, **_kwargs):
+        probe_calls.append(1)
+        return None
+
+    namespace["_fetch_codex_singleton_snapshot"] = fail_probe
+
+    def _window(label, used):
+        return SimpleNamespace(label=label, used_percent=used, reset_at=None, detail=None)
+
+    both = SimpleNamespace(
+        provider="openai-codex",
+        windows=(_window("Weekly", 40.0), _window("Session", 15.0)),
+        raw={
+            "rate_limit": {
+                "primary_window": {"used_percent": 40, "limit_window_seconds": 604_800},
+                "secondary_window": {"used_percent": 15, "limit_window_seconds": 18_000},
+            },
+        },
+    )
+    payload = namespace["_codex_singleton_payload"](both)
+    assert probe_calls == []
+    assert [(w["label"], w["limit_window_seconds"]) for w in payload["windows"]] == [
+        ("Weekly", 604_800),
+        ("Session", 18_000),
+    ]
+
+    partial = SimpleNamespace(
+        provider="openai-codex",
+        windows=(_window("Weekly", 40.0), _window("Session", 15.0)),
+        raw={
+            "rate_limit": {
+                "primary_window": {"used_percent": 40, "limit_window_seconds": 604_800},
+            },
+        },
+    )
+    payload = namespace["_codex_singleton_payload"](partial)
+    assert probe_calls == [1]
+    assert [(w["label"], w["limit_window_seconds"]) for w in payload["windows"]] == [
+        ("Weekly", 604_800),
+        ("Session", None),
+    ]
+
+    node = shutil.which("node")
+    if node is not None:
+        panels = (ROOT / "static" / "panels.js").read_text(encoding="utf-8")
+        start = panels.index("function _formatProviderQuotaWindowLabel")
+        end = panels.index("\nfunction _formatProviderQuotaLastChecked", start)
+        both_windows = namespace["_codex_singleton_payload"](both)["windows"]
+        script = f"""
+const translations = {{
+  provider_quota_session_limit: '5-hour limit',
+  provider_quota_weekly_limit: 'Weekly limit',
+  provider_quota_usage_limit: 'Usage limit',
+  provider_quota_window_fallback: 'Window'
+}};
+function t(key) {{ return translations[key] || key; }}
+{panels[start:end]}
+const limits = {{provider: 'openai-codex'}};
+const windows = {json.dumps(both_windows)};
+process.stdout.write(JSON.stringify(windows.map(window =>
+  _formatProviderQuotaWindowLabel(limits, window)
+)));
+"""
+        rendered = subprocess.run([node, "-e", script], check=True, capture_output=True, text=True)
+        assert json.loads(rendered.stdout) == ["Weekly limit", "5-hour limit"]

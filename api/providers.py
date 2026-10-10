@@ -503,18 +503,16 @@ def _fetch_codex_singleton_snapshot(api_key=None):
         return None
 
 
-def _codex_singleton_payload(snapshot, api_key=None):
-    payload = _snapshot_payload(snapshot)
+def _codex_durations_ready(payload):
     windows = payload.get("windows") if isinstance(payload, dict) else None
-    if windows and all(window.get("limit_window_seconds") is not None for window in windows):
-        return payload
+    return bool(windows) and all(window.get("limit_window_seconds") is not None for window in windows)
 
-    raw_payload = _snapshot_payload(_fetch_codex_singleton_snapshot(api_key))
+
+def _apply_codex_duration_source(payload, raw_payload):
     if not isinstance(raw_payload, dict):
         return payload
     if not isinstance(payload, dict):
         return raw_payload
-
     # Join on label rather than position. Both parsers walk the same fixed
     # (primary_window, secondary_window) order, but they issue separate requests
     # and each skips a window whose used_percent is missing. If one list is short
@@ -525,7 +523,7 @@ def _codex_singleton_payload(snapshot, api_key=None):
         label = str(raw_window.get("label") or "").strip().lower()
         if label and label not in raw_by_label:
             raw_by_label[label] = raw_window
-    for window in windows or ():
+    for window in payload.get("windows") or ():
         if window.get("limit_window_seconds") is not None:
             continue
         raw_window = raw_by_label.get(str(window.get("label") or "").strip().lower())
@@ -533,6 +531,24 @@ def _codex_singleton_payload(snapshot, api_key=None):
             continue
         window["limit_window_seconds"] = raw_window.get("limit_window_seconds")
     return payload
+
+
+def _codex_singleton_payload(snapshot, api_key=None):
+    payload = _snapshot_payload(snapshot)
+    if _codex_durations_ready(payload):
+        return payload
+    # Installed Agent windows omit duration; snapshot.raw is the usage body that
+    # already has it. Backfill before probing so a 503 cannot drop those labels.
+    raw_body = getattr(snapshot, "raw", None)
+    if isinstance(raw_body, dict):
+        payload = _apply_codex_duration_source(
+            payload, _snapshot_payload(_codex_snapshot_from_usage_payload(raw_body))
+        )
+        if _codex_durations_ready(payload):
+            return payload
+    return _apply_codex_duration_source(
+        payload, _snapshot_payload(_fetch_codex_singleton_snapshot(api_key))
+    )
 
 
 def _best_remaining_by_window(rows):
